@@ -149,12 +149,12 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	bar := progressbar.Default(int64(len(allProjects)), "Migrating")
 	for _, proj := range allProjects {
-		sheetID, err := loader.CreateSheet(ctx, &proj, 0)
+		sheetID, colMap, err := loader.CreateSheet(ctx, &proj, 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", proj.Name, err)
 			continue
 		}
-		if err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, map[string]int64{}); err != nil {
+		if err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap); err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", proj.Name, err)
 		}
 		migState.MarkCompleted(proj.ID)
