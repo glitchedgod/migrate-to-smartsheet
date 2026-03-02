@@ -1,0 +1,7 @@
+migrate-to-smartsheet
+dist/
+.migrate-state-*.json
+coverage.out
+.idea/
+.vscode/
+*.swp
