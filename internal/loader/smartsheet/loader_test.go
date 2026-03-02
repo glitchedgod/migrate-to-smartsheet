@@ -3,6 +3,7 @@ package smartsheet_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,10 @@ func TestCreateSheet(t *testing.T) {
 				"id":        float64(123456789),
 				"name":      "Test Project",
 				"permalink": "https://app.smartsheet.com/sheets/abc123",
+				"columns": []map[string]interface{}{
+					{"id": float64(11111), "title": "Name"},
+					{"id": float64(22222), "title": "Status"},
+				},
 			},
 		})
 	}))
@@ -38,9 +43,11 @@ func TestCreateSheet(t *testing.T) {
 			{Name: "Status", Type: model.TypeSingleSelect, Options: []string{"Todo", "Done"}},
 		},
 	}
-	sheetID, err := loader.CreateSheet(context.Background(), proj, 0)
+	sheetID, colMap, err := loader.CreateSheet(context.Background(), proj, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(123456789), sheetID)
+	assert.Equal(t, int64(11111), colMap["Name"])
+	assert.Equal(t, int64(22222), colMap["Status"])
 }
 
 func TestUploadAttachment(t *testing.T) {
@@ -64,4 +71,22 @@ func TestUploadAttachment(t *testing.T) {
 		strings.NewReader("hello attachment"),
 	)
 	require.NoError(t, err)
+}
+
+func TestAddComment(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "POST", r.Method)
+		assert.Contains(t, r.URL.Path, "/rows/")
+		assert.Contains(t, r.URL.Path, "/discussions")
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	err := loader.AddComment(context.Background(), 123456789, 987654321, "This is a comment")
+	require.NoError(t, err)
+	assert.Contains(t, string(capturedBody), "This is a comment")
 }

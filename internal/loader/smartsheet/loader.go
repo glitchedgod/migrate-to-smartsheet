@@ -48,10 +48,14 @@ type createSheetResponse struct {
 		ID        int64  `json:"id"`
 		Name      string `json:"name"`
 		Permalink string `json:"permalink"`
+		Columns   []struct {
+			ID    int64  `json:"id"`
+			Title string `json:"title"`
+		} `json:"columns"`
 	} `json:"result"`
 }
 
-func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspaceID int64) (int64, error) {
+func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspaceID int64) (int64, map[string]int64, error) {
 	cols := make([]columnPayload, 0, len(proj.Columns))
 	for i, c := range proj.Columns {
 		cp := columnPayload{
@@ -67,7 +71,7 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 
 	body, err := json.Marshal(map[string]interface{}{"name": proj.Name, "columns": cols})
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	url := l.baseURL + "/sheets"
@@ -77,29 +81,34 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+l.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("smartsheet API error: %s", resp.Status)
+		return 0, nil, fmt.Errorf("smartsheet API error: %s", resp.Status)
 	}
 
 	var result createSheetResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if result.ResultCode != 0 {
-		return 0, fmt.Errorf("smartsheet create sheet failed, resultCode=%d", result.ResultCode)
+		return 0, nil, fmt.Errorf("smartsheet create sheet failed, resultCode=%d", result.ResultCode)
 	}
-	return result.Result.ID, nil
+
+	colMap := make(map[string]int64, len(result.Result.Columns))
+	for _, c := range result.Result.Columns {
+		colMap[c.Title] = c.ID
+	}
+	return result.Result.ID, colMap, nil
 }
 
 type cellPayload struct {
