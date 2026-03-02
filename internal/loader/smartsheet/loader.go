@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 
 	"github.com/bchauhan/migrate-to-smartsheet/internal/transformer"
@@ -120,6 +122,79 @@ func (l *Loader) BulkInsertRows(ctx context.Context, sheetID int64, rows []model
 		if err := l.insertRowBatch(ctx, sheetID, rows[i:end], colIndexByName); err != nil {
 			return fmt.Errorf("batch %d: %w", i/batchSize, err)
 		}
+	}
+	return nil
+}
+
+// UploadAttachment uploads a file to a specific row in a Smartsheet sheet.
+// The attachment is posted as a multipart/form-data request.
+func (l *Loader) UploadAttachment(ctx context.Context, sheetID, rowID int64, filename, contentType string, body io.Reader) error {
+	url := fmt.Sprintf("%s/sheets/%d/rows/%d/attachments", l.baseURL, sheetID, rowID)
+
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+
+	go func() {
+		defer pw.Close()
+		part, err := mw.CreateFormFile("file", filename)
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if _, err := io.Copy(part, body); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		mw.Close()
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+l.token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("smartsheet attachment upload error: %s", resp.Status)
+	}
+	return nil
+}
+
+// AddComment posts a comment to a row's discussion thread.
+// Smartsheet API: POST /sheets/{sheetId}/rows/{rowId}/discussions
+func (l *Loader) AddComment(ctx context.Context, sheetID, rowID int64, text string) error {
+	url := fmt.Sprintf("%s/sheets/%d/rows/%d/discussions", l.baseURL, sheetID, rowID)
+
+	payload := map[string]interface{}{
+		"comment": map[string]string{
+			"text": text,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+l.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("smartsheet add comment error: %s", resp.Status)
 	}
 	return nil
 }

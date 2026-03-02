@@ -13,6 +13,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMondayExtractProjectPagination(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		callCount++
+		if callCount == 1 {
+			// First call: return cursor
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"boards": []map[string]interface{}{
+						{
+							"id": "board_1", "name": "Big Board",
+							"columns": []map[string]interface{}{
+								{"id": "name", "title": "Name", "type": "name"},
+							},
+							"items_page": map[string]interface{}{
+								"cursor": "cursor_abc",
+								"items": []map[string]interface{}{
+									{"id": "item_1", "name": "Item 1", "column_values": []interface{}{}},
+								},
+							},
+						},
+					},
+				},
+			})
+		} else {
+			// Second call: next_items_page, no cursor
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"next_items_page": map[string]interface{}{
+						"cursor": nil,
+						"items": []map[string]interface{}{
+							{"id": "item_2", "name": "Item 2", "column_values": []interface{}{}},
+						},
+					},
+				},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	e := mondayext.New("fake-token", mondayext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "", "board_1", extractor.Options{})
+	require.NoError(t, err)
+	assert.Len(t, proj.Rows, 2, "should have items from both pages")
+	assert.Equal(t, 2, callCount, "should have made 2 API calls")
+}
+
 func TestMondayExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

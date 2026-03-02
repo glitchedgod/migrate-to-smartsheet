@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/bchauhan/migrate-to-smartsheet/internal/loader/smartsheet"
@@ -40,4 +41,27 @@ func TestCreateSheet(t *testing.T) {
 	sheetID, err := loader.CreateSheet(context.Background(), proj, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(123456789), sheetID)
+}
+
+func TestUploadAttachment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "POST", r.Method)
+		assert.Contains(t, r.URL.Path, "/rows/")
+		assert.Contains(t, r.URL.Path, "/attachments")
+		assert.Contains(t, r.Header.Get("Content-Type"), "multipart/form-data")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	err := loader.UploadAttachment(
+		context.Background(),
+		123456789, // sheetID
+		987654321, // rowID
+		"test.txt",
+		"text/plain",
+		strings.NewReader("hello attachment"),
+	)
+	require.NoError(t, err)
 }

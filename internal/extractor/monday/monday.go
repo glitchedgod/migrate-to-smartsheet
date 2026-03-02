@@ -90,6 +90,7 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 }
 
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID string, opts extractor.Options) (*model.Project, error) {
+	// Initial query fetches columns + first page of items
 	var data struct {
 		Boards []struct {
 			ID      string `json:"id"`
@@ -100,7 +101,8 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 				Type  string `json:"type"`
 			} `json:"columns"`
 			ItemsPage struct {
-				Items []struct {
+				Cursor *string `json:"cursor"`
+				Items  []struct {
 					ID           string `json:"id"`
 					Name         string `json:"name"`
 					ColumnValues []struct {
@@ -112,7 +114,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 		} `json:"boards"`
 	}
 
-	q := fmt.Sprintf(`{ boards(ids: [%s]) { id name columns { id title type } items_page(limit: 500) { items { id name column_values { id text } } } } }`, boardID)
+	q := fmt.Sprintf(`{ boards(ids: [%s]) { id name columns { id title type } items_page(limit: 500) { cursor items { id name column_values { id text } } } } }`, boardID)
 	if err := e.query(ctx, q, &data); err != nil {
 		return nil, err
 	}
@@ -120,6 +122,53 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 		return nil, fmt.Errorf("board %s not found", boardID)
 	}
 	board := data.Boards[0]
+
+	// Collect all items across pages
+	type item struct {
+		ID           string
+		Name         string
+		ColumnValues []struct {
+			ID   string
+			Text string
+		}
+	}
+	allItems := make([]item, 0, len(board.ItemsPage.Items))
+	for _, it := range board.ItemsPage.Items {
+		cvs := make([]struct{ ID, Text string }, len(it.ColumnValues))
+		for i, cv := range it.ColumnValues {
+			cvs[i] = struct{ ID, Text string }{cv.ID, cv.Text}
+		}
+		allItems = append(allItems, item{ID: it.ID, Name: it.Name, ColumnValues: cvs})
+	}
+
+	cursor := board.ItemsPage.Cursor
+	for cursor != nil {
+		var pageData struct {
+			NextItemsPage struct {
+				Cursor *string `json:"cursor"`
+				Items  []struct {
+					ID           string `json:"id"`
+					Name         string `json:"name"`
+					ColumnValues []struct {
+						ID   string `json:"id"`
+						Text string `json:"text"`
+					} `json:"column_values"`
+				} `json:"items"`
+			} `json:"next_items_page"`
+		}
+		pageQ := fmt.Sprintf(`{ next_items_page(limit: 500, cursor: "%s") { cursor items { id name column_values { id text } } } }`, *cursor)
+		if err := e.query(ctx, pageQ, &pageData); err != nil {
+			return nil, err
+		}
+		for _, it := range pageData.NextItemsPage.Items {
+			cvs := make([]struct{ ID, Text string }, len(it.ColumnValues))
+			for i, cv := range it.ColumnValues {
+				cvs[i] = struct{ ID, Text string }{cv.ID, cv.Text}
+			}
+			allItems = append(allItems, item{ID: it.ID, Name: it.Name, ColumnValues: cvs})
+		}
+		cursor = pageData.NextItemsPage.Cursor
+	}
 
 	columns := make([]model.ColumnDef, 0, len(board.Columns))
 	for _, c := range board.Columns {
@@ -137,15 +186,15 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 		columns = append(columns, model.ColumnDef{Name: c.Title, Type: colType})
 	}
 
-	rows := make([]model.Row, 0, len(board.ItemsPage.Items))
-	for _, item := range board.ItemsPage.Items {
-		cells := []model.Cell{{ColumnName: "Name", Value: item.Name}}
-		for _, cv := range item.ColumnValues {
+	rows := make([]model.Row, 0, len(allItems))
+	for _, it := range allItems {
+		cells := []model.Cell{{ColumnName: "Name", Value: it.Name}}
+		for _, cv := range it.ColumnValues {
 			if text := transformer.StripHTML(cv.Text); text != "" {
 				cells = append(cells, model.Cell{ColumnName: cv.ID, Value: text})
 			}
 		}
-		rows = append(rows, model.Row{ID: item.ID, Cells: cells})
+		rows = append(rows, model.Row{ID: it.ID, Cells: cells})
 	}
 
 	return &model.Project{ID: boardID, Name: board.Name, Columns: columns, Rows: rows}, nil
