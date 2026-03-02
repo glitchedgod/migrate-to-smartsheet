@@ -13,6 +13,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMondayListWorkspaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"workspaces": []map[string]interface{}{
+					{"id": "ws_1", "name": "Main Workspace"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := mondayext.New("fake-token", mondayext.WithBaseURL(srv.URL))
+	ws, err := e.ListWorkspaces(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, ws, 1)
+	assert.Equal(t, "ws_1", ws[0].ID)
+	assert.Equal(t, "Main Workspace", ws[0].Name)
+}
+
 func TestMondayExtractProjectPagination(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

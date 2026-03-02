@@ -43,3 +43,17 @@ func TestMarkCompleted(t *testing.T) {
 	s.MarkCompleted("proj1")
 	assert.Len(t, s.CompletedSheets, 1)
 }
+
+func TestSaveToInvalidPath(t *testing.T) {
+	s := &state.MigrationState{Source: "asana"}
+	err := state.Save("/nonexistent/dir/file.json", s)
+	assert.Error(t, err)
+}
+
+func TestLoadCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/bad.json"
+	require.NoError(t, os.WriteFile(path, []byte("{invalid json"), 0600))
+	_, err := state.Load(path)
+	assert.Error(t, err)
+}

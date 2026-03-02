@@ -13,6 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestJiraListWorkspaces(t *testing.T) {
+	e := jiraext.New("user@example.com", "api-token", "https://myorg.atlassian.net")
+	ws, err := e.ListWorkspaces(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, ws, 1)
+	assert.Equal(t, "https://myorg.atlassian.net", ws[0].ID)
+}
+
 func TestJiraExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

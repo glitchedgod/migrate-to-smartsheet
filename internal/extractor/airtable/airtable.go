@@ -63,7 +63,7 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 			Name string `json:"name"`
 		} `json:"bases"`
 	}
-	if err := e.get(ctx, "https://api.airtable.com/v0/meta/bases", &resp); err != nil {
+	if err := e.get(ctx, e.baseURL+"/meta/bases", &resp); err != nil {
 		return nil, err
 	}
 	ws := make([]model.Workspace, len(resp.Bases))

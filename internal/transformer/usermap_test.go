@@ -23,3 +23,12 @@ func TestLoadUserMapEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "", um.Lookup("anything"))
 }
+
+func TestUserMapLookupNilMap(t *testing.T) {
+	// LoadUserMapFromReader with malformed CSV should still not panic on Lookup
+	um, err := transformer.LoadUserMapFromReader(strings.NewReader("source_id,smartsheet_email\n"))
+	require.NoError(t, err)
+	// An empty map should return "" not panic
+	assert.Equal(t, "", um.Lookup(""))
+	assert.Equal(t, "", um.Lookup("any"))
+}
