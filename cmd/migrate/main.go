@@ -41,7 +41,3 @@ func main() {
 	}
 }
 
-func runMigrate(cmd *cobra.Command, args []string) error {
-	// Implemented in run.go
-	return nil
-}
