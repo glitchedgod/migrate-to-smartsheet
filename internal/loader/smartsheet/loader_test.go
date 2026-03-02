@@ -3,6 +3,7 @@ package smartsheet_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,4 +90,86 @@ func TestAddComment(t *testing.T) {
 	err := loader.AddComment(context.Background(), 123456789, 987654321, "This is a comment")
 	require.NoError(t, err)
 	assert.Contains(t, string(capturedBody), "This is a comment")
+}
+
+func TestBulkInsertRows(t *testing.T) {
+	var receivedBatches [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/rows") {
+			body, _ := io.ReadAll(r.Body)
+			receivedBatches = append(receivedBatches, body)
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+
+	rows := make([]model.Row, 0, 600)
+	for i := 0; i < 600; i++ {
+		rows = append(rows, model.Row{
+			ID:    fmt.Sprintf("row_%d", i),
+			Cells: []model.Cell{{ColumnName: "Name", Value: fmt.Sprintf("Task %d", i)}},
+		})
+	}
+	colMap := map[string]int64{"Name": 11111}
+
+	err := loader.BulkInsertRows(context.Background(), 123456789, rows, colMap)
+	require.NoError(t, err)
+	assert.Len(t, receivedBatches, 2, "600 rows should produce 2 batches (500 + 100)")
+}
+
+func TestBulkInsertRowsEmpty(t *testing.T) {
+	loader := smartsheet.New("fake-token")
+	err := loader.BulkInsertRows(context.Background(), 123456789, []model.Row{}, map[string]int64{})
+	require.NoError(t, err)
+}
+
+func TestCreateSheetAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("bad-token", smartsheet.WithBaseURL(srv.URL))
+	proj := &model.Project{
+		Name:    "Test",
+		Columns: []model.ColumnDef{{Name: "Name", Type: model.TypeText}},
+	}
+	_, _, err := loader.CreateSheet(context.Background(), proj, 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestCreateSheetNonZeroResultCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"resultCode": 3,
+			"result":     map[string]interface{}{"id": float64(0)},
+		})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	proj := &model.Project{
+		Name:    "Test",
+		Columns: []model.ColumnDef{{Name: "Name", Type: model.TypeText}},
+	}
+	_, _, err := loader.CreateSheet(context.Background(), proj, 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "resultCode=3")
+}
+
+func TestBulkInsertRowsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	rows := []model.Row{{ID: "r1", Cells: []model.Cell{{ColumnName: "Name", Value: "Task"}}}}
+	err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
+	assert.Error(t, err)
 }
