@@ -13,6 +13,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWrikeListWorkspaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/accounts", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"id": "acc_1", "name": "My Wrike Account"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := wrikeext.New("fake-token", wrikeext.WithBaseURL(srv.URL))
+	ws, err := e.ListWorkspaces(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, ws, 1)
+	assert.Equal(t, "acc_1", ws[0].ID)
+	assert.Equal(t, "My Wrike Account", ws[0].Name)
+}
+
 func TestWrikeExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

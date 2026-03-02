@@ -13,6 +13,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTrelloExtractProjectExcludesClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{
+			{"id": "c1", "name": "Open Card", "desc": "", "closed": false, "idList": "l1"},
+			{"id": "c2", "name": "Closed Card", "desc": "", "closed": true, "idList": "l1"},
+		})
+	}))
+	defer srv.Close()
+
+	e := trelloext.New("key", "token", trelloext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "", "board_1", extractor.Options{IncludeArchived: false})
+	require.NoError(t, err)
+	assert.Len(t, proj.Rows, 1)
+	assert.Equal(t, "Open Card", proj.Rows[0].Cells[0].Value)
+}
+
+func TestTrelloExtractProjectDueDate(t *testing.T) {
+	due := "2026-04-01T00:00:00.000Z"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{
+			{"id": "c1", "name": "Card With Due", "desc": "", "closed": false, "idList": "l1", "due": due},
+		})
+	}))
+	defer srv.Close()
+
+	e := trelloext.New("key", "token", trelloext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "", "board_1", extractor.Options{})
+	require.NoError(t, err)
+	assert.Len(t, proj.Rows, 1)
+	cellMap := make(map[string]interface{})
+	for _, c := range proj.Rows[0].Cells {
+		cellMap[c.ColumnName] = c.Value
+	}
+	assert.Equal(t, due, cellMap["Due Date"])
+}
+
 func TestTrelloListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

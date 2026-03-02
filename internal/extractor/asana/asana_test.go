@@ -13,6 +13,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAsanaExtractProjectExcludesCompleted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"gid": "t1", "name": "Active Task", "completed": false, "notes": "", "tags": []interface{}{}},
+				{"gid": "t2", "name": "Done Task", "completed": true, "notes": "", "tags": []interface{}{}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := asanaext.New("fake-token", asanaext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "ws", "proj", extractor.Options{IncludeArchived: false})
+	require.NoError(t, err)
+	assert.Len(t, proj.Rows, 1)
+	assert.Equal(t, "Active Task", proj.Rows[0].Cells[0].Value)
+}
+
+func TestAsanaExtractProjectIncludesCompleted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"gid": "t1", "name": "Active Task", "completed": false, "notes": "", "tags": []interface{}{}},
+				{"gid": "t2", "name": "Done Task", "completed": true, "notes": "", "tags": []interface{}{}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := asanaext.New("fake-token", asanaext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "ws", "proj", extractor.Options{IncludeArchived: true})
+	require.NoError(t, err)
+	assert.Len(t, proj.Rows, 2)
+}
+
 func TestAsanaListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
