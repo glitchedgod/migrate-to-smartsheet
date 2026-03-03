@@ -77,7 +77,7 @@ func TransformCellValue(v interface{}, colType model.ColumnType, um *UserMap) in
 	case model.TypeContact:
 		email := extractEmail(v, um)
 		if email == "" {
-			return v
+			return nil
 		}
 		return FormatContact(email)
 
