@@ -78,3 +78,29 @@ func TestTransformCellValueUserRemap(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "mapped@example.com", m["email"])
 }
+
+func TestNormalizeDateInvalidTenChar(t *testing.T) {
+	// Non-ISO 10-char strings should not pass through as-is
+	result := transformer.NormalizeDate("2026/04/01")
+	assert.NotEqual(t, "2026/04/01", result, "slash-separated date should not pass through")
+	result2 := transformer.NormalizeDate("not-a-dat")
+	assert.Equal(t, "not-a-dat", result2, "truly unparseable string falls through")
+}
+
+func TestNormalizeDateTimezoneOffset(t *testing.T) {
+	// Jira/Wrike may emit timezone-offset timestamps
+	result := transformer.NormalizeDate("2026-04-01T10:00:00+05:30")
+	assert.Equal(t, "2026-04-01", result)
+}
+
+func TestTransformCellValueContactMapInterface(t *testing.T) {
+	um := transformer.NewUserMap()
+	// JSON-decoded contact (map[string]interface{}) should extract email
+	v := transformer.TransformCellValue(
+		map[string]interface{}{"email": "alice@example.com", "name": "Alice"},
+		model.TypeContact, um,
+	)
+	m, ok := v.(map[string]string)
+	assert.True(t, ok)
+	assert.Equal(t, "alice@example.com", m["email"])
+}

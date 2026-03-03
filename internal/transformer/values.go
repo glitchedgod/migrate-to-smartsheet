@@ -18,12 +18,13 @@ func NormalizeDate(v interface{}) string {
 		return ""
 	}
 	if len(s) == 10 {
-		return s
+		if _, err := time.Parse("2006-01-02", s); err == nil {
+			return s
+		}
+		return "" // 10-char string that is not a valid YYYY-MM-DD
 	}
 	for _, layout := range []string{
-		time.RFC3339,
-		"2006-01-02T15:04:05.000Z",
-		"2006-01-02T15:04:05Z07:00",
+		time.RFC3339Nano,
 		"2006-01-02T15:04:05",
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
@@ -43,11 +44,16 @@ func FormatContact(email string) interface{} {
 }
 
 // FormatMultiSelect converts a []string to a comma-separated string for MULTI_PICKLIST.
+// Any commas within individual values are replaced with spaces to avoid breaking the delimiter.
 func FormatMultiSelect(values []string) string {
 	if len(values) == 0 {
 		return ""
 	}
-	return strings.Join(values, ",")
+	sanitized := make([]string, len(values))
+	for i, v := range values {
+		sanitized[i] = strings.ReplaceAll(v, ",", " ")
+	}
+	return strings.Join(sanitized, ",")
 }
 
 // FormatBool converts various bool representations to an actual bool.
@@ -93,6 +99,9 @@ func TransformCellValue(v interface{}, colType model.ColumnType, um *UserMap) in
 					contacts = append(contacts, map[string]string{"email": e})
 				}
 			}
+			if len(contacts) == 0 {
+				return nil
+			}
 			return contacts
 		case string:
 			if mapped := um.Lookup(val); mapped != "" {
@@ -131,6 +140,10 @@ func extractEmail(v interface{}, um *UserMap) string {
 		email = val
 	case map[string]string:
 		email = val["email"]
+	case map[string]interface{}:
+		if e, ok := val["email"].(string); ok {
+			email = e
+		}
 	}
 	if email == "" {
 		return ""
