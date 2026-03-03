@@ -5,3 +5,6 @@ coverage.out
 .idea/
 .vscode/
 *.swp
+.playwright-mcp/
+docs/
+migrate
