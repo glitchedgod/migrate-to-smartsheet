@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/state"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

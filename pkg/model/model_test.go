@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 	"github.com/stretchr/testify/assert"
 )
 

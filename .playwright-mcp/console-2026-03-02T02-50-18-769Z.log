@@ -1,0 +1,2 @@
+[     757ms] TypeError: Failed to execute 'observe' on 'MutationObserver': parameter 1 is not of type 'Node'.
+    at window.onload (https://developers.smartsheet.com/assets/icon-class.b2618ffe69f1afbbb690a5834d215937d4338353c6fb9673feb7b8442635eecb.019aa434.js:125:14)

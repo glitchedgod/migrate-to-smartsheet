@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	mondayext "github.com/bchauhan/migrate-to-smartsheet/internal/extractor/monday"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	mondayext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/monday"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

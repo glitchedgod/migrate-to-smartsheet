@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	wrikeext "github.com/bchauhan/migrate-to-smartsheet/internal/extractor/wrike"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	wrikeext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/wrike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

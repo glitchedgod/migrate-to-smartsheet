@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	trelloext "github.com/bchauhan/migrate-to-smartsheet/internal/extractor/trello"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	trelloext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/trello"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

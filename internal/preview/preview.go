@@ -3,7 +3,7 @@ package preview
 import (
 	"fmt"
 
-	"github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 )
 
 const maxAttachmentBytes = 25 * 1024 * 1024

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/ratelimit"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/ratelimit"
 	"github.com/stretchr/testify/assert"
 )
 

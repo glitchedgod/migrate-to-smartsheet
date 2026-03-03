@@ -3,8 +3,8 @@ package preview_test
 import (
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/preview"
-	"github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/preview"
+	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 	"github.com/stretchr/testify/assert"
 )
 

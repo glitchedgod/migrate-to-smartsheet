@@ -9,8 +9,8 @@ import (
 	"mime/multipart"
 	"net/http"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/transformer"
-	"github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
+	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 )
 
 const defaultBaseURL = "https://api.smartsheet.com/2.0"

@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	notionext "github.com/bchauhan/migrate-to-smartsheet/internal/extractor/notion"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	notionext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/notion"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

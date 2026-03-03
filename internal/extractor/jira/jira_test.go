@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	jiraext "github.com/bchauhan/migrate-to-smartsheet/internal/extractor/jira"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	jiraext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/jira"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

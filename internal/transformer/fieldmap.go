@@ -1,6 +1,6 @@
 package transformer
 
-import "github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+import "github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 
 func ToSmartsheetColumnType(t model.ColumnType) string {
 	switch t {

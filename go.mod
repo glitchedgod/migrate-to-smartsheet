@@ -1,6 +1,6 @@
-module github.com/bchauhan/migrate-to-smartsheet
+module github.com/glitchedgod/migrate-to-smartsheet
 
-go 1.25.4
+go 1.25.0
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/loader/smartsheet"
-	"github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/loader/smartsheet"
+	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

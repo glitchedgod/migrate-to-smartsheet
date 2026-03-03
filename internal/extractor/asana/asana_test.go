@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	asanaext "github.com/bchauhan/migrate-to-smartsheet/internal/extractor/asana"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	asanaext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/asana"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

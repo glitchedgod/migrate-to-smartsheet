@@ -3,7 +3,7 @@ package transformer_test
 import (
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/transformer"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
 	"github.com/stretchr/testify/assert"
 )
 

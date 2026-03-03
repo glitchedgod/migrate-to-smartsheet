@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/transformer"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

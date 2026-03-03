@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bchauhan/migrate-to-smartsheet/internal/extractor"
-	"github.com/bchauhan/migrate-to-smartsheet/internal/ratelimit"
-	"github.com/bchauhan/migrate-to-smartsheet/pkg/model"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/ratelimit"
+	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 )
 
 const defaultBaseURL = "https://api.notion.com/v1"
