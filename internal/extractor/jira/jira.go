@@ -126,3 +126,9 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey 
 
 	return &model.Project{ID: projectKey, Name: projectKey, Columns: columns, Rows: rows}, nil
 }
+
+// ListProjects lists all projects in the given workspace.
+// TODO: Full implementation coming in a later task.
+func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
+	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+}
