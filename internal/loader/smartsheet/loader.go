@@ -90,7 +90,7 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return 0, nil, fmt.Errorf("smartsheet API error: %s", resp.Status)
@@ -144,7 +144,7 @@ func (l *Loader) UploadAttachment(ctx context.Context, sheetID, rowID int64, fil
 	mw := multipart.NewWriter(pw)
 
 	go func() {
-		defer pw.Close()
+		defer func() { _ = pw.Close() }()
 		part, err := mw.CreateFormFile("file", filename)
 		if err != nil {
 			pw.CloseWithError(err)
@@ -154,7 +154,7 @@ func (l *Loader) UploadAttachment(ctx context.Context, sheetID, rowID int64, fil
 			pw.CloseWithError(err)
 			return
 		}
-		mw.Close()
+		_ = mw.Close()
 	}()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, pr)
@@ -168,7 +168,7 @@ func (l *Loader) UploadAttachment(ctx context.Context, sheetID, rowID int64, fil
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("smartsheet attachment upload error: %s", resp.Status)
 	}
@@ -201,7 +201,7 @@ func (l *Loader) AddComment(ctx context.Context, sheetID, rowID int64, text stri
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("smartsheet add comment error: %s", resp.Status)
 	}
@@ -239,7 +239,7 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("smartsheet row insert error: %s", resp.Status)
 	}

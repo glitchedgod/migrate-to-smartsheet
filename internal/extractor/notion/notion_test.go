@@ -16,7 +16,7 @@ import (
 func TestNotionExtractProjectPropertyTypes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"results": []map[string]interface{}{
 				{
 					"id": "page_1",
@@ -67,7 +67,7 @@ func TestNotionExtractProjectPropertyTypes(t *testing.T) {
 func TestNotionExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"results": []map[string]interface{}{
 				{
 					"id": "page_1",

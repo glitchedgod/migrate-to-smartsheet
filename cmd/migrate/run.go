@@ -39,13 +39,13 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	includeArchived, _ := flags.GetBool("include-archived")
 
 	if sourceStr == "" {
-		survey.AskOne(&survey.Select{
+		survey.AskOne(&survey.Select{ //nolint:errcheck
 			Message: "Select source platform:",
 			Options: []string{"asana", "monday", "trello", "jira", "airtable", "notion", "wrike"},
 		}, &sourceStr)
 	}
 	if sourceToken == "" {
-		survey.AskOne(&survey.Password{Message: fmt.Sprintf("[%s] API token:", sourceStr)}, &sourceToken)
+		survey.AskOne(&survey.Password{Message: fmt.Sprintf("[%s] API token:", sourceStr)}, &sourceToken) //nolint:errcheck
 	}
 
 	ext, err := buildExtractor(sourceStr, sourceToken, cmd)
@@ -61,7 +61,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	fmt.Println("✓")
 
 	if ssToken == "" {
-		survey.AskOne(&survey.Password{Message: "Smartsheet API token:"}, &ssToken)
+		survey.AskOne(&survey.Password{Message: "Smartsheet API token:"}, &ssToken) //nolint:errcheck
 	}
 	loader := ssloader.New(ssToken)
 
@@ -69,7 +69,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	var migState *state.MigrationState
 	if existing, err := state.Load(stateFile); err == nil {
 		var resume bool
-		survey.AskOne(&survey.Confirm{
+		survey.AskOne(&survey.Confirm{ //nolint:errcheck
 			Message: fmt.Sprintf("Found incomplete migration from %s. Resume?", existing.StartedAt.Format("2006-01-02")),
 			Default: true,
 		}, &resume)
@@ -87,7 +87,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("opening user map: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		userMap, err = transformer.LoadUserMapFromReader(f)
 		if err != nil {
 			return fmt.Errorf("loading user map: %w", err)
@@ -140,7 +140,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	if !yes {
 		var proceed bool
-		survey.AskOne(&survey.Confirm{Message: "Proceed with migration?", Default: false}, &proceed)
+		survey.AskOne(&survey.Confirm{Message: "Proceed with migration?", Default: false}, &proceed) //nolint:errcheck
 		if !proceed {
 			fmt.Println("Migration cancelled.")
 			return nil
@@ -159,7 +159,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 		migState.MarkCompleted(proj.ID)
 		_ = state.Save(stateFile, migState)
-		bar.Add(1)
+		_ = bar.Add(1)
 	}
 
 	fmt.Println("\n✓ Migration complete!")

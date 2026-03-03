@@ -16,7 +16,7 @@ import (
 func TestAsanaExtractProjectExcludesCompleted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
 				{"gid": "t1", "name": "Active Task", "completed": false, "notes": "", "tags": []interface{}{}},
 				{"gid": "t2", "name": "Done Task", "completed": true, "notes": "", "tags": []interface{}{}},
@@ -35,7 +35,7 @@ func TestAsanaExtractProjectExcludesCompleted(t *testing.T) {
 func TestAsanaExtractProjectIncludesCompleted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
 				{"gid": "t1", "name": "Active Task", "completed": false, "notes": "", "tags": []interface{}{}},
 				{"gid": "t2", "name": "Done Task", "completed": true, "notes": "", "tags": []interface{}{}},
@@ -53,7 +53,7 @@ func TestAsanaExtractProjectIncludesCompleted(t *testing.T) {
 func TestAsanaListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
 				{"gid": "ws_1", "name": "My Workspace"},
 			},
@@ -71,7 +71,7 @@ func TestAsanaListWorkspaces(t *testing.T) {
 func TestAsanaExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
 				{
 					"gid": "task_1", "name": "First Task", "notes": "notes",

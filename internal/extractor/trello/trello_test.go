@@ -16,7 +16,7 @@ import (
 func TestTrelloExtractProjectExcludesClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 			{"id": "c1", "name": "Open Card", "desc": "", "closed": false, "idList": "l1"},
 			{"id": "c2", "name": "Closed Card", "desc": "", "closed": true, "idList": "l1"},
 		})
@@ -34,7 +34,7 @@ func TestTrelloExtractProjectDueDate(t *testing.T) {
 	due := "2026-04-01T00:00:00.000Z"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 			{"id": "c1", "name": "Card With Due", "desc": "", "closed": false, "idList": "l1", "due": due},
 		})
 	}))
@@ -54,7 +54,7 @@ func TestTrelloExtractProjectDueDate(t *testing.T) {
 func TestTrelloListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 			{"id": "org_1", "displayName": "My Org"},
 		})
 	}))
@@ -70,7 +70,7 @@ func TestTrelloListWorkspaces(t *testing.T) {
 func TestTrelloExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 			{"id": "card_1", "name": "First Card", "desc": "desc", "closed": false, "idList": "list_1"},
 		})
 	}))

@@ -57,7 +57,7 @@ func (e *Extractor) query(ctx context.Context, q string, out interface{}) error 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var wrapper struct {
 		Data   json.RawMessage `json:"data"`

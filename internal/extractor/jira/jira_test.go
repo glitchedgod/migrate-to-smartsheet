@@ -25,13 +25,13 @@ func TestJiraExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/rest/api/3/field" {
-			json.NewEncoder(w).Encode([]map[string]interface{}{
+			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 				{"id": "summary", "name": "Summary"},
 				{"id": "status", "name": "Status"},
 			})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"issues": []map[string]interface{}{
 				{
 					"id": "10001", "key": "PROJ-1",

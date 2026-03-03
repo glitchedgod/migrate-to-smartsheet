@@ -16,7 +16,7 @@ import (
 func TestMondayListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": map[string]interface{}{
 				"workspaces": []map[string]interface{}{
 					{"id": "ws_1", "name": "Main Workspace"},
@@ -41,7 +41,7 @@ func TestMondayExtractProjectPagination(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			// First call: return cursor
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 				"data": map[string]interface{}{
 					"boards": []map[string]interface{}{
 						{
@@ -61,7 +61,7 @@ func TestMondayExtractProjectPagination(t *testing.T) {
 			})
 		} else {
 			// Second call: next_items_page, no cursor
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 				"data": map[string]interface{}{
 					"next_items_page": map[string]interface{}{
 						"cursor": nil,
@@ -85,7 +85,7 @@ func TestMondayExtractProjectPagination(t *testing.T) {
 func TestMondayExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": map[string]interface{}{
 				"boards": []map[string]interface{}{
 					{

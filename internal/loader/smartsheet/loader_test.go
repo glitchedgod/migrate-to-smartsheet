@@ -20,7 +20,7 @@ func TestCreateSheet(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "POST", r.Method)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"resultCode": 0,
 			"result": map[string]interface{}{
 				"id":        float64(123456789),
@@ -58,7 +58,7 @@ func TestUploadAttachment(t *testing.T) {
 		assert.Contains(t, r.URL.Path, "/attachments")
 		assert.Contains(t, r.Header.Get("Content-Type"), "multipart/form-data")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0})
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -82,7 +82,7 @@ func TestAddComment(t *testing.T) {
 		assert.Contains(t, r.URL.Path, "/discussions")
 		capturedBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0})
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -100,7 +100,7 @@ func TestBulkInsertRows(t *testing.T) {
 			receivedBatches = append(receivedBatches, body)
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0})
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -145,7 +145,7 @@ func TestCreateSheetAPIError(t *testing.T) {
 func TestCreateSheetNonZeroResultCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"resultCode": 3,
 			"result":     map[string]interface{}{"id": float64(0)},
 		})

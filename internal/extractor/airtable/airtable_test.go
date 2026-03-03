@@ -16,7 +16,7 @@ import (
 func TestAirtableListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"bases": []map[string]interface{}{
 				{"id": "base_1", "name": "My Base"},
 				{"id": "base_2", "name": "Another Base"},
@@ -40,14 +40,14 @@ func TestAirtableExtractProjectPagination(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			offset := "offset_abc"
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 				"records": []map[string]interface{}{
 					{"id": "rec_1", "fields": map[string]interface{}{"Name": "First"}},
 				},
 				"offset": &offset,
 			})
 		} else {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 				"records": []map[string]interface{}{
 					{"id": "rec_2", "fields": map[string]interface{}{"Name": "Second"}},
 				},
@@ -66,7 +66,7 @@ func TestAirtableExtractProjectPagination(t *testing.T) {
 func TestAirtableExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"records": []map[string]interface{}{
 				{"id": "rec_1", "fields": map[string]interface{}{"Name": "First Record", "Status": "In Progress"}},
 			},

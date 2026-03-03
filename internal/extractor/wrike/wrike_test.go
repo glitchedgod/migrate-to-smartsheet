@@ -17,7 +17,7 @@ func TestWrikeListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/accounts", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
 				{"id": "acc_1", "name": "My Wrike Account"},
 			},
@@ -36,7 +36,7 @@ func TestWrikeListWorkspaces(t *testing.T) {
 func TestWrikeExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
 				{
 					"id": "IEABCDE", "title": "First Task",

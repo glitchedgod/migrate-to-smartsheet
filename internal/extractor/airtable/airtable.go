@@ -49,7 +49,7 @@ func (e *Extractor) get(ctx context.Context, url string, out interface{}) error 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("airtable GET %s: %s", url, resp.Status)
 	}

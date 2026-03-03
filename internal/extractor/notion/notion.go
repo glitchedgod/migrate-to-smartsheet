@@ -57,7 +57,7 @@ func (e *Extractor) post(ctx context.Context, path string, body interface{}, out
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("notion POST %s: %s", path, resp.Status)
 	}
