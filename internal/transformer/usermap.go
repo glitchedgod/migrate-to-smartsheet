@@ -32,3 +32,8 @@ func LoadUserMapFromReader(r io.Reader) (*UserMap, error) {
 	}
 	return &UserMap{m: m}, nil
 }
+
+// NewUserMap returns an empty UserMap that returns "" for all lookups.
+func NewUserMap() *UserMap {
+	return &UserMap{m: make(map[string]string)}
+}
