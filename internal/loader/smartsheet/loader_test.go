@@ -3,7 +3,6 @@ package smartsheet_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,32 +97,69 @@ func TestBulkInsertRows(t *testing.T) {
 		if strings.Contains(r.URL.Path, "/rows") {
 			body, _ := io.ReadAll(r.Body)
 			receivedBatches = append(receivedBatches, body)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+				"result": []map[string]interface{}{
+					{"id": float64(1001), "cells": []interface{}{}},
+					{"id": float64(1002), "cells": []interface{}{}},
+				},
+			})
 		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
 	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
-
-	rows := make([]model.Row, 0, 600)
-	for i := 0; i < 600; i++ {
-		rows = append(rows, model.Row{
-			ID:    fmt.Sprintf("row_%d", i),
-			Cells: []model.Cell{{ColumnName: "Name", Value: fmt.Sprintf("Task %d", i)}},
-		})
+	rows := []model.Row{
+		{ID: "src_1", Cells: []model.Cell{{ColumnName: "Name", Value: "Task 1"}}},
+		{ID: "src_2", Cells: []model.Cell{{ColumnName: "Name", Value: "Task 2"}}},
 	}
 	colMap := map[string]int64{"Name": 11111}
 
-	err := loader.BulkInsertRows(context.Background(), 123456789, rows, colMap)
+	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, rows, colMap)
 	require.NoError(t, err)
-	assert.Len(t, receivedBatches, 2, "600 rows should produce 2 batches (500 + 100)")
+	assert.Equal(t, int64(1001), rowIDMap["src_1"])
+	assert.Equal(t, int64(1002), rowIDMap["src_2"])
 }
 
 func TestBulkInsertRowsEmpty(t *testing.T) {
 	loader := smartsheet.New("fake-token")
-	err := loader.BulkInsertRows(context.Background(), 123456789, []model.Row{}, map[string]int64{})
+	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, []model.Row{}, map[string]int64{})
 	require.NoError(t, err)
+	assert.Empty(t, rowIDMap)
+}
+
+func TestBulkInsertRowsHierarchy(t *testing.T) {
+	var receivedBodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/rows") {
+			body, _ := io.ReadAll(r.Body)
+			receivedBodies = append(receivedBodies, string(body))
+			w.Header().Set("Content-Type", "application/json")
+			if len(receivedBodies) == 1 {
+				json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+					"result": []map[string]interface{}{{"id": float64(9001)}},
+				})
+			} else {
+				json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+					"result": []map[string]interface{}{{"id": float64(9002)}},
+				})
+			}
+		}
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	rows := []model.Row{
+		{ID: "parent_1", ParentID: "", Cells: []model.Cell{{ColumnName: "Name", Value: "Parent"}}},
+		{ID: "child_1", ParentID: "parent_1", Cells: []model.Cell{{ColumnName: "Name", Value: "Child"}}},
+	}
+
+	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
+	require.NoError(t, err)
+	assert.Len(t, receivedBodies, 2, "should have made 2 separate insert calls")
+	assert.Equal(t, int64(9001), rowIDMap["parent_1"])
+	assert.Equal(t, int64(9002), rowIDMap["child_1"])
+	assert.Contains(t, receivedBodies[1], "9001", "child batch should reference parent's Smartsheet ID")
 }
 
 func TestCreateSheetAPIError(t *testing.T) {
@@ -170,6 +206,6 @@ func TestBulkInsertRowsHTTPError(t *testing.T) {
 
 	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
 	rows := []model.Row{{ID: "r1", Cells: []model.Cell{{ColumnName: "Name", Value: "Task"}}}}
-	err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
+	_, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
 	assert.Error(t, err)
 }

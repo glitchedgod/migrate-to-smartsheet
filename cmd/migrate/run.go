@@ -154,9 +154,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", proj.Name, err)
 			continue
 		}
-		if err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap); err != nil {
+		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", proj.Name, err)
 		}
+		_ = rowIDMap // used for attachments/comments
 		migState.MarkCompleted(proj.ID)
 		_ = state.Save(stateFile, migState)
 		_ = bar.Add(1)

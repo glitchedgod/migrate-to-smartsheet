@@ -118,18 +118,59 @@ type cellPayload struct {
 
 type rowPayload struct {
 	ToBottom bool          `json:"toBottom"`
+	ParentID *int64        `json:"parentId,omitempty"`
 	Cells    []cellPayload `json:"cells"`
 }
 
-func (l *Loader) BulkInsertRows(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64) error {
+type insertRowsResponse struct {
+	Result []struct {
+		ID int64 `json:"id"`
+	} `json:"result"`
+}
+
+// BulkInsertRows inserts rows in batches of 500.
+// Rows with ParentID are inserted in a second pass after top-level rows,
+// with parentId set to the Smartsheet ID returned from the first pass.
+// Returns a map of source row ID → Smartsheet row ID.
+func (l *Loader) BulkInsertRows(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64) (map[string]int64, error) {
+	rowIDMap := make(map[string]int64)
+
+	// Separate top-level and child rows
+	var topLevel, children []model.Row
+	for _, r := range rows {
+		if r.ParentID == "" {
+			topLevel = append(topLevel, r)
+		} else {
+			children = append(children, r)
+		}
+	}
+
+	// Pass 1: insert top-level rows
+	if err := l.insertInBatches(ctx, sheetID, topLevel, colIndexByName, rowIDMap, nil); err != nil {
+		return rowIDMap, err
+	}
+
+	// Pass 2: insert child rows with resolved parentId
+	if err := l.insertInBatches(ctx, sheetID, children, colIndexByName, rowIDMap, rowIDMap); err != nil {
+		return rowIDMap, err
+	}
+
+	return rowIDMap, nil
+}
+
+func (l *Loader) insertInBatches(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, rowIDMap map[string]int64, parentIDMap map[string]int64) error {
 	const batchSize = 500
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		if err := l.insertRowBatch(ctx, sheetID, rows[i:end], colIndexByName); err != nil {
+		batchMap, err := l.insertRowBatch(ctx, sheetID, rows[i:end], colIndexByName, parentIDMap)
+		if err != nil {
 			return fmt.Errorf("batch %d: %w", i/batchSize, err)
+		}
+		for k, v := range batchMap {
+			rowIDMap[k] = v
 		}
 	}
 	return nil
@@ -208,7 +249,7 @@ func (l *Loader) AddComment(ctx context.Context, sheetID, rowID int64, text stri
 	return nil
 }
 
-func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64) error {
+func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, parentIDMap map[string]int64) (map[string]int64, error) {
 	rowPayloads := make([]rowPayload, 0, len(rows))
 	for _, r := range rows {
 		cells := make([]cellPayload, 0, len(r.Cells))
@@ -219,29 +260,48 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 			}
 			cells = append(cells, cellPayload{ColumnID: colID, Value: c.Value})
 		}
-		rowPayloads = append(rowPayloads, rowPayload{ToBottom: true, Cells: cells})
+		rp := rowPayload{ToBottom: true, Cells: cells}
+		if parentIDMap != nil && r.ParentID != "" {
+			if ssParentID, ok := parentIDMap[r.ParentID]; ok {
+				rp.ParentID = &ssParentID
+				rp.ToBottom = false
+			}
+		}
+		rowPayloads = append(rowPayloads, rp)
 	}
 
 	body, err := json.Marshal(rowPayloads)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	url := fmt.Sprintf("%s/sheets/%d/rows", l.baseURL, sheetID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+l.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("smartsheet row insert error: %s", resp.Status)
+		return nil, fmt.Errorf("smartsheet row insert error: %s", resp.Status)
 	}
-	return nil
+
+	var result insertRowsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	rowIDMap := make(map[string]int64, len(rows))
+	for i, r := range rows {
+		if i < len(result.Result) {
+			rowIDMap[r.ID] = result.Result[i].ID
+		}
+	}
+	return rowIDMap, nil
 }
