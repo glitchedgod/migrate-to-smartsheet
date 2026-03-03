@@ -28,5 +28,5 @@ changelog:
     exclude: ["^docs:", "^test:", "^chore:"]
 release:
   github:
-    owner: bchauhan
+    owner: glitchedgod
     name: migrate-to-smartsheet
