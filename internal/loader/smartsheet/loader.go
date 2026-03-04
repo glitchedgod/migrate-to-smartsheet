@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/ratelimit"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
 	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 )
@@ -19,6 +20,7 @@ type Loader struct {
 	token   string
 	baseURL string
 	client  *http.Client
+	rl      *ratelimit.Limiter
 }
 
 type Option func(*Loader)
@@ -28,7 +30,12 @@ func WithBaseURL(u string) Option {
 }
 
 func New(token string, opts ...Option) *Loader {
-	l := &Loader{token: token, baseURL: defaultBaseURL, client: &http.Client{}}
+	l := &Loader{
+		token:   token,
+		baseURL: defaultBaseURL,
+		client:  &http.Client{},
+		rl:      ratelimit.ForPlatform("smartsheet"),
+	}
 	for _, o := range opts {
 		o(l)
 	}
@@ -79,6 +86,7 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 		url = fmt.Sprintf("%s/workspaces/%d/sheets", l.baseURL, workspaceID)
 	}
 
+	l.rl.Wait()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
@@ -198,6 +206,7 @@ func (l *Loader) UploadAttachment(ctx context.Context, sheetID, rowID int64, fil
 		_ = mw.Close()
 	}()
 
+	l.rl.Wait()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, pr)
 	if err != nil {
 		return err
@@ -231,6 +240,7 @@ func (l *Loader) AddComment(ctx context.Context, sheetID, rowID int64, text stri
 		return err
 	}
 
+	l.rl.Wait()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -276,6 +286,7 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 	}
 
 	url := fmt.Sprintf("%s/sheets/%d/rows", l.baseURL, sheetID)
+	l.rl.Wait()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

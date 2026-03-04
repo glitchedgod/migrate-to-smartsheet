@@ -209,3 +209,23 @@ func TestBulkInsertRowsHTTPError(t *testing.T) {
 	_, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
 	assert.Error(t, err)
 }
+
+func TestLoaderHasRateLimiter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"resultCode": 0,
+			"result": map[string]interface{}{
+				"id": float64(1), "name": "test",
+				"columns": []map[string]interface{}{{"id": float64(1), "title": "Name"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("token", smartsheet.WithBaseURL(srv.URL))
+	proj := &model.Project{Name: "Test", Columns: []model.ColumnDef{{Name: "Name", Type: model.TypeText}}}
+	sheetID, _, err := loader.CreateSheet(context.Background(), proj, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), sheetID)
+}
