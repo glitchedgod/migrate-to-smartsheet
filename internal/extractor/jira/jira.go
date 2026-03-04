@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
@@ -65,6 +66,14 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 }
 
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey string, opts extractor.Options) (*model.Project, error) {
+	// Build JQL with optional date filters
+	jql := fmt.Sprintf("project=%s ORDER BY created ASC", projectKey)
+	if !opts.CreatedAfter.IsZero() {
+		jql = fmt.Sprintf("project=%s AND created >= \"%s\" ORDER BY created ASC", projectKey, opts.CreatedAfter.Format("2006-01-02"))
+	} else if !opts.UpdatedAfter.IsZero() {
+		jql = fmt.Sprintf("project=%s AND updated >= \"%s\" ORDER BY created ASC", projectKey, opts.UpdatedAfter.Format("2006-01-02"))
+	}
+
 	var allIssues []struct {
 		ID     string                 `json:"id"`
 		Key    string                 `json:"key"`
@@ -81,12 +90,12 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey 
 			} `json:"issues"`
 			Total int `json:"total"`
 		}
-		path := fmt.Sprintf("/rest/api/3/search?jql=project=%s&startAt=%d&maxResults=100", projectKey, startAt)
+		path := fmt.Sprintf("/rest/api/3/search?jql=%s&startAt=%d&maxResults=100", url.QueryEscape(jql), startAt)
 		if err := e.get(ctx, path, &resp); err != nil {
 			return nil, err
 		}
 		allIssues = append(allIssues, resp.Issues...)
-		if startAt+len(resp.Issues) >= resp.Total {
+		if len(resp.Issues) == 0 || startAt+len(resp.Issues) >= resp.Total {
 			break
 		}
 		startAt += len(resp.Issues)
@@ -96,15 +105,19 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey 
 		{Name: "Summary", Type: model.TypeText},
 		{Name: "Description", Type: model.TypeText},
 		{Name: "Status", Type: model.TypeSingleSelect},
+		{Name: "Priority", Type: model.TypeSingleSelect},
+		{Name: "Issue Type", Type: model.TypeSingleSelect},
 		{Name: "Assignee", Type: model.TypeContact},
+		{Name: "Reporter", Type: model.TypeContact},
+		{Name: "Labels", Type: model.TypeMultiSelect},
 		{Name: "Due Date", Type: model.TypeDate},
 		{Name: "Key", Type: model.TypeText},
 	}
 
 	rows := make([]model.Row, 0, len(allIssues))
 	for _, issue := range allIssues {
-		// Summary first so Cells[0] is the summary value.
-		var cells []model.Cell
+		cells := []model.Cell{{ColumnName: "Key", Value: issue.Key}}
+
 		if v, ok := issue.Fields["summary"].(string); ok {
 			cells = append(cells, model.Cell{ColumnName: "Summary", Value: v})
 		}
@@ -114,21 +127,54 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey 
 		if status, ok := issue.Fields["status"].(map[string]interface{}); ok {
 			cells = append(cells, model.Cell{ColumnName: "Status", Value: status["name"]})
 		}
-		if assignee, ok := issue.Fields["assignee"].(map[string]interface{}); ok {
+		if priority, ok := issue.Fields["priority"].(map[string]interface{}); ok && priority != nil {
+			cells = append(cells, model.Cell{ColumnName: "Priority", Value: priority["name"]})
+		}
+		if issueType, ok := issue.Fields["issuetype"].(map[string]interface{}); ok && issueType != nil {
+			cells = append(cells, model.Cell{ColumnName: "Issue Type", Value: issueType["name"]})
+		}
+		if assignee, ok := issue.Fields["assignee"].(map[string]interface{}); ok && assignee != nil {
 			cells = append(cells, model.Cell{ColumnName: "Assignee", Value: assignee["emailAddress"]})
 		}
-		if due, ok := issue.Fields["duedate"].(string); ok {
+		if reporter, ok := issue.Fields["reporter"].(map[string]interface{}); ok && reporter != nil {
+			cells = append(cells, model.Cell{ColumnName: "Reporter", Value: reporter["emailAddress"]})
+		}
+		if labels, ok := issue.Fields["labels"].([]interface{}); ok && len(labels) > 0 {
+			labelStrs := make([]string, 0, len(labels))
+			for _, l := range labels {
+				if s, ok := l.(string); ok {
+					labelStrs = append(labelStrs, s)
+				}
+			}
+			if len(labelStrs) > 0 {
+				cells = append(cells, model.Cell{ColumnName: "Labels", Value: labelStrs})
+			}
+		}
+		if due, ok := issue.Fields["duedate"].(string); ok && due != "" {
 			cells = append(cells, model.Cell{ColumnName: "Due Date", Value: due})
 		}
-		cells = append(cells, model.Cell{ColumnName: "Key", Value: issue.Key})
+
 		rows = append(rows, model.Row{ID: issue.ID, Cells: cells})
 	}
 
 	return &model.Project{ID: projectKey, Name: projectKey, Columns: columns, Rows: rows}, nil
 }
 
-// ListProjects lists all projects in the given workspace.
-// TODO: Full implementation coming in a later task.
+// ListProjects lists all projects accessible to the configured credentials.
 func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+	var resp struct {
+		Values []struct {
+			ID   string `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"values"`
+	}
+	if err := e.get(ctx, "/rest/api/3/project/search?maxResults=100", &resp); err != nil {
+		return nil, err
+	}
+	refs := make([]extractor.ProjectRef, len(resp.Values))
+	for i, p := range resp.Values {
+		refs[i] = extractor.ProjectRef{ID: p.Key, Name: p.Name}
+	}
+	return refs, nil
 }
