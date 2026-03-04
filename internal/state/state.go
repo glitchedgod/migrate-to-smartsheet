@@ -35,6 +35,20 @@ func (s *MigrationState) MarkCompleted(sourceProjectID string) {
 	s.CompletedSheets = append(s.CompletedSheets, sourceProjectID)
 }
 
+// UpdatePartialSheet records progress within a currently-migrating sheet.
+func (s *MigrationState) UpdatePartialSheet(sourceID string, smartsheetID int64, lastRow int) {
+	s.PartialSheet = &PartialSheet{
+		SourceID:         sourceID,
+		SmartsheetID:     smartsheetID,
+		LastCompletedRow: lastRow,
+	}
+}
+
+// ClearPartialSheet removes the partial sheet record (called when a sheet completes successfully).
+func (s *MigrationState) ClearPartialSheet() {
+	s.PartialSheet = nil
+}
+
 func Save(path string, s *MigrationState) error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

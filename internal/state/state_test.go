@@ -57,3 +57,36 @@ func TestLoadCorruptJSON(t *testing.T) {
 	_, err := state.Load(path)
 	assert.Error(t, err)
 }
+
+func TestUpdatePartialSheet(t *testing.T) {
+	s := &state.MigrationState{Source: "asana"}
+	s.UpdatePartialSheet("proj_1", 999, 250)
+	assert.NotNil(t, s.PartialSheet)
+	assert.Equal(t, "proj_1", s.PartialSheet.SourceID)
+	assert.Equal(t, int64(999), s.PartialSheet.SmartsheetID)
+	assert.Equal(t, 250, s.PartialSheet.LastCompletedRow)
+}
+
+func TestClearPartialSheet(t *testing.T) {
+	s := &state.MigrationState{
+		PartialSheet: &state.PartialSheet{SourceID: "p1"},
+	}
+	s.ClearPartialSheet()
+	assert.Nil(t, s.PartialSheet)
+}
+
+func TestUpdatePartialSheetRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	s := &state.MigrationState{Source: "jira"}
+	s.UpdatePartialSheet("PROJ", 12345, 100)
+
+	path := dir + "/state.json"
+	require.NoError(t, state.Save(path, s))
+
+	loaded, err := state.Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.PartialSheet)
+	assert.Equal(t, "PROJ", loaded.PartialSheet.SourceID)
+	assert.Equal(t, int64(12345), loaded.PartialSheet.SmartsheetID)
+	assert.Equal(t, 100, loaded.PartialSheet.LastCompletedRow)
+}
