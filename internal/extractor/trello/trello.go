@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
@@ -41,7 +42,11 @@ func New(key, token string, opts ...Option) *Extractor {
 
 func (e *Extractor) get(ctx context.Context, path string, out interface{}) error {
 	e.rl.Wait()
-	url := fmt.Sprintf("%s%s?key=%s&token=%s", e.baseURL, path, e.key, e.token)
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	url := fmt.Sprintf("%s%s%skey=%s&token=%s", e.baseURL, path, sep, e.key, e.token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -72,7 +77,46 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 	return ws, nil
 }
 
+func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
+	var boards []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := e.get(ctx, fmt.Sprintf("/organizations/%s/boards?fields=id,name", workspaceID), &boards); err != nil {
+		return nil, err
+	}
+	refs := make([]extractor.ProjectRef, len(boards))
+	for i, b := range boards {
+		refs[i] = extractor.ProjectRef{ID: b.ID, Name: b.Name}
+	}
+	return refs, nil
+}
+
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID string, opts extractor.Options) (*model.Project, error) {
+	// Fetch board name
+	var board struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	boardName := projectID
+	if err := e.get(ctx, fmt.Sprintf("/boards/%s?fields=id,name", projectID), &board); err == nil && board.Name != "" {
+		boardName = board.Name
+	}
+
+	// Fetch lists for name resolution
+	var lists []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	_ = e.get(ctx, fmt.Sprintf("/boards/%s/lists?fields=id,name", projectID), &lists)
+	listNameByID := make(map[string]string, len(lists))
+	listNames := make([]string, 0, len(lists))
+	for _, l := range lists {
+		listNameByID[l.ID] = l.Name
+		listNames = append(listNames, l.Name)
+	}
+
+	// Fetch cards
 	var cards []struct {
 		ID     string  `json:"id"`
 		Name   string  `json:"name"`
@@ -80,17 +124,22 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		Closed bool    `json:"closed"`
 		Due    *string `json:"due"`
 		IDList string  `json:"idList"`
+		Labels []struct {
+			Name  string `json:"name"`
+			Color string `json:"color"`
+		} `json:"labels"`
 	}
-	if err := e.get(ctx, fmt.Sprintf("/boards/%s/cards", projectID), &cards); err != nil {
+	if err := e.get(ctx, fmt.Sprintf("/boards/%s/cards?limit=1000&fields=id,name,desc,closed,due,idList,labels", projectID), &cards); err != nil {
 		return nil, err
 	}
 
 	columns := []model.ColumnDef{
 		{Name: "Name", Type: model.TypeText},
 		{Name: "Description", Type: model.TypeText},
-		{Name: "List", Type: model.TypeSingleSelect},
+		{Name: "List", Type: model.TypeSingleSelect, Options: listNames},
 		{Name: "Due Date", Type: model.TypeDate},
 		{Name: "Closed", Type: model.TypeCheckbox},
+		{Name: "Labels", Type: model.TypeMultiSelect},
 	}
 
 	rows := make([]model.Row, 0, len(cards))
@@ -98,23 +147,34 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		if !opts.IncludeArchived && c.Closed {
 			continue
 		}
+		listName := listNameByID[c.IDList]
+		if listName == "" {
+			listName = c.IDList
+		}
 		cells := []model.Cell{
 			{ColumnName: "Name", Value: c.Name},
 			{ColumnName: "Description", Value: c.Desc},
-			{ColumnName: "List", Value: c.IDList},
+			{ColumnName: "List", Value: listName},
 			{ColumnName: "Closed", Value: c.Closed},
 		}
 		if c.Due != nil {
 			cells = append(cells, model.Cell{ColumnName: "Due Date", Value: *c.Due})
 		}
+		if len(c.Labels) > 0 {
+			labels := make([]string, 0, len(c.Labels))
+			for _, l := range c.Labels {
+				if l.Name != "" {
+					labels = append(labels, l.Name)
+				} else if l.Color != "" {
+					labels = append(labels, l.Color)
+				}
+			}
+			if len(labels) > 0 {
+				cells = append(cells, model.Cell{ColumnName: "Labels", Value: labels})
+			}
+		}
 		rows = append(rows, model.Row{ID: c.ID, Cells: cells})
 	}
 
-	return &model.Project{ID: projectID, Name: projectID, Columns: columns, Rows: rows}, nil
-}
-
-// ListProjects lists all projects in the given workspace.
-// TODO: Full implementation coming in a later task.
-func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+	return &model.Project{ID: projectID, Name: boardName, Columns: columns, Rows: rows}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
@@ -81,4 +82,60 @@ func TestTrelloExtractProject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "board_1", proj.ID)
 	assert.Len(t, proj.Rows, 1)
+}
+
+func TestTrelloListProjects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
+			{"id": "board_1", "name": "My Board"},
+		})
+	}))
+	defer srv.Close()
+
+	e := trelloext.New("key", "token", trelloext.WithBaseURL(srv.URL))
+	projects, err := e.ListProjects(context.Background(), "org_1")
+	require.NoError(t, err)
+	assert.Len(t, projects, 1)
+	assert.Equal(t, "board_1", projects[0].ID)
+	assert.Equal(t, "My Board", projects[0].Name)
+}
+
+func TestTrelloExtractProjectListNamesAndLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/lists") {
+			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
+				{"id": "list_1", "name": "To Do"},
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/cards") {
+			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
+				{
+					"id": "c1", "name": "Card", "desc": "", "closed": false,
+					"idList": "list_1",
+					"labels": []map[string]interface{}{{"name": "urgent", "color": "red"}},
+				},
+			})
+			return
+		}
+		// board name
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": "board_1", "name": "My Board"}) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	e := trelloext.New("key", "token", trelloext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "org_1", "board_1", extractor.Options{})
+	require.NoError(t, err)
+	assert.Equal(t, "My Board", proj.Name)
+
+	cellMap := make(map[string]interface{})
+	for _, c := range proj.Rows[0].Cells {
+		cellMap[c.ColumnName] = c.Value
+	}
+	assert.Equal(t, "To Do", cellMap["List"], "list ID should resolve to name")
+	labels, ok := cellMap["Labels"].([]string)
+	assert.True(t, ok)
+	assert.Contains(t, labels, "urgent")
 }
