@@ -75,19 +75,31 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 }
 
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID string, opts extractor.Options) (*model.Project, error) {
+	// Fetch folder name
+	var folderResp struct {
+		Data []struct {
+			Title string `json:"title"`
+		} `json:"data"`
+	}
+	folderName := folderID
+	if err := e.get(ctx, fmt.Sprintf("/folders/%s", folderID), &folderResp); err == nil && len(folderResp.Data) > 0 {
+		folderName = folderResp.Data[0].Title
+	}
+
 	var resp struct {
 		Data []struct {
-			ID          string   `json:"id"`
-			Title       string   `json:"title"`
-			Description string   `json:"description"`
-			Status      string   `json:"status"`
-			ParentIDs   []string `json:"parentIds"`
-			Dates       struct {
+			ID           string   `json:"id"`
+			Title        string   `json:"title"`
+			Description  string   `json:"description"`
+			Status       string   `json:"status"`
+			ParentIDs    []string `json:"parentIds"`
+			Responsibles []string `json:"responsibles"`
+			Dates        struct {
 				Due string `json:"due"`
 			} `json:"dates"`
 		} `json:"data"`
 	}
-	if err := e.get(ctx, fmt.Sprintf("/folders/%s/tasks?fields=[\"description\",\"dates\",\"parentIds\"]", folderID), &resp); err != nil {
+	if err := e.get(ctx, fmt.Sprintf("/folders/%s/tasks?fields=[\"description\",\"dates\",\"parentIds\",\"responsibles\"]", folderID), &resp); err != nil {
 		return nil, err
 	}
 
@@ -96,6 +108,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID st
 		{Name: "Description", Type: model.TypeText},
 		{Name: "Status", Type: model.TypeSingleSelect},
 		{Name: "Due Date", Type: model.TypeDate},
+		{Name: "Assignees", Type: model.TypeMultiContact},
 	}
 
 	rows := make([]model.Row, 0, len(resp.Data))
@@ -112,14 +125,33 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID st
 		if t.Dates.Due != "" {
 			cells = append(cells, model.Cell{ColumnName: "Due Date", Value: t.Dates.Due})
 		}
+		if len(t.Responsibles) > 0 {
+			cells = append(cells, model.Cell{ColumnName: "Assignees", Value: t.Responsibles})
+		}
 		rows = append(rows, model.Row{ID: t.ID, ParentID: parentID, Cells: cells})
 	}
 
-	return &model.Project{ID: folderID, Name: folderID, Columns: columns, Rows: rows}, nil
+	return &model.Project{ID: folderID, Name: folderName, Columns: columns, Rows: rows}, nil
 }
 
-// ListProjects lists all projects in the given workspace.
-// TODO: Full implementation coming in a later task.
+// ListProjects lists all project-folders in the given account/workspace.
 func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+	var resp struct {
+		Data []struct {
+			ID      string                 `json:"id"`
+			Title   string                 `json:"title"`
+			Project map[string]interface{} `json:"project"`
+		} `json:"data"`
+	}
+	path := fmt.Sprintf("/accounts/%s/folders", workspaceID)
+	if err := e.get(ctx, path, &resp); err != nil {
+		return nil, err
+	}
+	var refs []extractor.ProjectRef
+	for _, f := range resp.Data {
+		if f.Project != nil {
+			refs = append(refs, extractor.ProjectRef{ID: f.ID, Name: f.Title})
+		}
+	}
+	return refs, nil
 }

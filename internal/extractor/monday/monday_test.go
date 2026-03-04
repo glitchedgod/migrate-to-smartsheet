@@ -113,3 +113,66 @@ func TestMondayExtractProject(t *testing.T) {
 	assert.Len(t, proj.Rows, 1)
 	assert.Equal(t, "First Item", proj.Rows[0].Cells[0].Value)
 }
+
+func TestMondayListProjects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"data": map[string]interface{}{
+				"boards": []map[string]interface{}{
+					{"id": "ws_1", "name": "Main Workspace"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := mondayext.New("fake-token", mondayext.WithBaseURL(srv.URL))
+	projects, err := e.ListProjects(context.Background(), "")
+	require.NoError(t, err)
+	assert.Len(t, projects, 1)
+	assert.Equal(t, "ws_1", projects[0].ID)
+	assert.Equal(t, "Main Workspace", projects[0].Name)
+}
+
+func TestMondayColumnNamesInCells(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"data": map[string]interface{}{
+				"boards": []map[string]interface{}{
+					{
+						"id": "b1", "name": "Board",
+						"columns": []map[string]interface{}{
+							{"id": "status", "title": "Status", "type": "color"},
+						},
+						"items_page": map[string]interface{}{
+							"cursor": nil,
+							"items": []map[string]interface{}{
+								{
+									"id": "i1", "name": "Item 1",
+									"column_values": []map[string]interface{}{
+										{"id": "status", "text": "Done"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := mondayext.New("fake-token", mondayext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "", "b1", extractor.Options{})
+	require.NoError(t, err)
+	assert.Len(t, proj.Rows, 1)
+
+	// Find the Status cell — should use column TITLE not raw ID
+	cellMap := make(map[string]interface{})
+	for _, c := range proj.Rows[0].Cells {
+		cellMap[c.ColumnName] = c.Value
+	}
+	assert.Equal(t, "Done", cellMap["Status"], "cell should use column title 'Status', not raw id 'status'")
+}

@@ -186,12 +186,21 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 		columns = append(columns, model.ColumnDef{Name: c.Title, Type: colType})
 	}
 
+	colTitleByID := make(map[string]string, len(board.Columns))
+	for _, c := range board.Columns {
+		colTitleByID[c.ID] = c.Title
+	}
+
 	rows := make([]model.Row, 0, len(allItems))
 	for _, it := range allItems {
 		cells := []model.Cell{{ColumnName: "Name", Value: it.Name}}
 		for _, cv := range it.ColumnValues {
+			title := colTitleByID[cv.ID]
+			if title == "" {
+				title = cv.ID // fallback to ID if not found
+			}
 			if text := transformer.StripHTML(cv.Text); text != "" {
-				cells = append(cells, model.Cell{ColumnName: cv.ID, Value: text})
+				cells = append(cells, model.Cell{ColumnName: title, Value: text})
 			}
 		}
 		rows = append(rows, model.Row{ID: it.ID, Cells: cells})
@@ -200,8 +209,24 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 	return &model.Project{ID: boardID, Name: board.Name, Columns: columns, Rows: rows}, nil
 }
 
-// ListProjects lists all projects in the given workspace.
-// TODO: Full implementation coming in a later task.
+// ListProjects lists all boards in the given workspace.
 func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+	var data struct {
+		Boards []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"boards"`
+	}
+	q := `{ boards(limit: 100) { id name } }`
+	if workspaceID != "" {
+		q = fmt.Sprintf(`{ boards(workspace_ids: [%s], limit: 100) { id name } }`, workspaceID)
+	}
+	if err := e.query(ctx, q, &data); err != nil {
+		return nil, err
+	}
+	refs := make([]extractor.ProjectRef, len(data.Boards))
+	for i, b := range data.Boards {
+		refs[i] = extractor.ProjectRef{ID: b.ID, Name: b.Name}
+	}
+	return refs, nil
 }
