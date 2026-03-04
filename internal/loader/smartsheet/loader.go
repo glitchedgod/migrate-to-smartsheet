@@ -65,9 +65,14 @@ type createSheetResponse struct {
 func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspaceID int64) (int64, map[string]int64, error) {
 	cols := make([]columnPayload, 0, len(proj.Columns))
 	for i, c := range proj.Columns {
+		ssType := transformer.ToSmartsheetColumnType(c.Type)
+		// Smartsheet rejects PICKLIST/MULTI_PICKLIST with no options — fall back to TEXT_NUMBER
+		if (ssType == "PICKLIST" || ssType == "MULTI_PICKLIST") && len(c.Options) == 0 {
+			ssType = "TEXT_NUMBER"
+		}
 		cp := columnPayload{
 			Title:   c.Name,
-			Type:    transformer.ToSmartsheetColumnType(c.Type),
+			Type:    ssType,
 			Options: c.Options,
 		}
 		if i == 0 {
