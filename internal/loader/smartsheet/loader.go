@@ -70,6 +70,15 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 		if (ssType == "PICKLIST" || ssType == "MULTI_PICKLIST") && len(c.Options) == 0 {
 			ssType = "TEXT_NUMBER"
 		}
+		// Smartsheet returns 500 when creating CONTACT_LIST columns via the sheet
+		// creation endpoint — fall back to TEXT_NUMBER (values are still preserved).
+		if ssType == "CONTACT_LIST" {
+			ssType = "TEXT_NUMBER"
+		}
+		// Smartsheet does not support DATETIME as a column type — use DATE instead.
+		if ssType == "DATETIME" {
+			ssType = "DATE"
+		}
 		cp := columnPayload{
 			Title:   c.Name,
 			Type:    ssType,
