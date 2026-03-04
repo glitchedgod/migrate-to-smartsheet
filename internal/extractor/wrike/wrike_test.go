@@ -16,11 +16,17 @@ import (
 
 func TestWrikeListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/accounts", r.URL.Path)
+		assert.Equal(t, "/contacts", r.URL.Path)
+		assert.Equal(t, "true", r.URL.Query().Get("me"))
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
-				{"id": "acc_1", "name": "My Wrike Account"},
+				{
+					"accountId": "acc_1",
+					"profiles": []map[string]interface{}{
+						{"accountId": "acc_1", "name": "My Wrike Account"},
+					},
+				},
 			},
 		})
 	}))

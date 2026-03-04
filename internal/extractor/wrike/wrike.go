@@ -60,18 +60,29 @@ func (e *Extractor) get(ctx context.Context, path string, out interface{}) error
 func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, error) {
 	var resp struct {
 		Data []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			AccountID string `json:"accountId"`
+			Profiles  []struct {
+				AccountID string `json:"accountId"`
+				Name      string `json:"name"`
+			} `json:"profiles"`
 		} `json:"data"`
 	}
-	if err := e.get(ctx, "/accounts", &resp); err != nil {
+	if err := e.get(ctx, "/contacts?me=true", &resp); err != nil {
 		return nil, err
 	}
-	ws := make([]model.Workspace, len(resp.Data))
-	for i, a := range resp.Data {
-		ws[i] = model.Workspace{ID: a.ID, Name: a.Name}
+	if len(resp.Data) == 0 {
+		return nil, fmt.Errorf("wrike: could not determine account from contacts")
 	}
-	return ws, nil
+	contact := resp.Data[0]
+	accountID := contact.AccountID
+	accountName := "Wrike Account"
+	for _, p := range contact.Profiles {
+		if p.AccountID == accountID {
+			accountName = p.Name
+			break
+		}
+	}
+	return []model.Workspace{{ID: accountID, Name: accountName}}, nil
 }
 
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID string, opts extractor.Options) (*model.Project, error) {
@@ -143,8 +154,7 @@ func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]ext
 			Project map[string]interface{} `json:"project"`
 		} `json:"data"`
 	}
-	path := fmt.Sprintf("/accounts/%s/folders", workspaceID)
-	if err := e.get(ctx, path, &resp); err != nil {
+	if err := e.get(ctx, "/folders", &resp); err != nil {
 		return nil, err
 	}
 	var refs []extractor.ProjectRef
