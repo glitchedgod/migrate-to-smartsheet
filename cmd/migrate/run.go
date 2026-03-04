@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	survey "github.com/AlecAivazis/survey/v2"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
 	airtableext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/airtable"
 	asanaext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/asana"
 	jiraext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/jira"
@@ -15,7 +17,6 @@ import (
 	notionext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/notion"
 	trelloext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/trello"
 	wrikeext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/wrike"
-	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
 	ssloader "github.com/glitchedgod/migrate-to-smartsheet/internal/loader/smartsheet"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/preview"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/state"
@@ -34,10 +35,36 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	ssToken, _ := flags.GetString("smartsheet-token")
 	yes, _ := flags.GetBool("yes")
 	userMapPath, _ := flags.GetString("user-map")
+	conflictMode, _ := flags.GetString("conflict")
 	includeAttachments, _ := flags.GetBool("include-attachments")
 	includeComments, _ := flags.GetBool("include-comments")
 	includeArchived, _ := flags.GetBool("include-archived")
+	sheetPrefix, _ := flags.GetString("sheet-prefix")
+	sheetSuffix, _ := flags.GetString("sheet-suffix")
+	sheetTemplate, _ := flags.GetString("sheet-name-template")
+	projectsFilter, _ := flags.GetString("projects")
+	excludeFieldsStr, _ := flags.GetString("exclude-fields")
+	createdAfterStr, _ := flags.GetString("created-after")
+	updatedAfterStr, _ := flags.GetString("updated-after")
 
+	var excludeFields []string
+	if excludeFieldsStr != "" {
+		excludeFields = strings.Split(excludeFieldsStr, ",")
+	}
+
+	var createdAfter, updatedAfter time.Time
+	if createdAfterStr != "" {
+		if t, err := time.Parse("2006-01-02", createdAfterStr); err == nil {
+			createdAfter = t
+		}
+	}
+	if updatedAfterStr != "" {
+		if t, err := time.Parse("2006-01-02", updatedAfterStr); err == nil {
+			updatedAfter = t
+		}
+	}
+
+	// Interactive prompts for missing required values
 	if sourceStr == "" {
 		survey.AskOne(&survey.Select{ //nolint:errcheck
 			Message: "Select source platform:",
@@ -53,35 +80,121 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("building extractor: %w", err)
 	}
 
-	fmt.Print("  Connecting... ")
+	// Connect to source
+	fmt.Print("  Connecting to source... ")
 	workspaces, err := ext.ListWorkspaces(ctx)
 	if err != nil {
 		return fmt.Errorf("listing workspaces: %w", err)
 	}
 	fmt.Println("✓")
 
+	// Select workspace
+	var selectedWorkspace model.Workspace
+	workspaceFlag, _ := flags.GetString("workspace")
+	if workspaceFlag != "" {
+		for _, ws := range workspaces {
+			if ws.Name == workspaceFlag || ws.ID == workspaceFlag {
+				selectedWorkspace = ws
+				break
+			}
+		}
+		if selectedWorkspace.ID == "" {
+			return fmt.Errorf("workspace %q not found", workspaceFlag)
+		}
+	} else if len(workspaces) == 1 {
+		selectedWorkspace = workspaces[0]
+	} else {
+		wsNames := make([]string, len(workspaces))
+		for i, ws := range workspaces {
+			wsNames[i] = ws.Name
+		}
+		var wsChoice string
+		survey.AskOne(&survey.Select{Message: "Select workspace:", Options: wsNames}, &wsChoice) //nolint:errcheck
+		for _, ws := range workspaces {
+			if ws.Name == wsChoice {
+				selectedWorkspace = ws
+				break
+			}
+		}
+	}
+
+	// List and select projects
+	fmt.Print("  Listing projects... ")
+	projectRefs, err := ext.ListProjects(ctx, selectedWorkspace.ID)
+	if err != nil {
+		return fmt.Errorf("listing projects: %w", err)
+	}
+	fmt.Printf("✓ (%d projects)\n", len(projectRefs))
+
+	var selectedProjects []extractor.ProjectRef
+	if projectsFilter != "" {
+		filterSet := make(map[string]bool)
+		for _, p := range strings.Split(projectsFilter, ",") {
+			filterSet[strings.TrimSpace(p)] = true
+		}
+		for _, p := range projectRefs {
+			if filterSet[p.Name] || filterSet[p.ID] {
+				selectedProjects = append(selectedProjects, p)
+			}
+		}
+	} else if yes {
+		selectedProjects = projectRefs
+	} else {
+		projNames := make([]string, len(projectRefs))
+		for i, p := range projectRefs {
+			projNames[i] = p.Name
+		}
+		var chosen []string
+		survey.AskOne(&survey.MultiSelect{Message: "Select projects to migrate:", Options: projNames}, &chosen) //nolint:errcheck
+		nameToRef := make(map[string]extractor.ProjectRef)
+		for _, p := range projectRefs {
+			nameToRef[p.Name] = p
+		}
+		for _, name := range chosen {
+			selectedProjects = append(selectedProjects, nameToRef[name])
+		}
+	}
+
+	if len(selectedProjects) == 0 {
+		fmt.Println("No projects selected. Exiting.")
+		return nil
+	}
+
+	// Smartsheet setup
 	if ssToken == "" {
 		survey.AskOne(&survey.Password{Message: "Smartsheet API token:"}, &ssToken) //nolint:errcheck
 	}
 	loader := ssloader.New(ssToken)
 
-	stateFile := fmt.Sprintf(".migrate-state-%s.json", time.Now().Format("2006-01-02"))
+	// Resume state
+	stateFile := fmt.Sprintf(".migrate-state-%s-%d.json", sourceStr, time.Now().Unix())
 	var migState *state.MigrationState
-	if existing, err := state.Load(stateFile); err == nil {
-		var resume bool
-		survey.AskOne(&survey.Confirm{ //nolint:errcheck
-			Message: fmt.Sprintf("Found incomplete migration from %s. Resume?", existing.StartedAt.Format("2006-01-02")),
-			Default: true,
-		}, &resume)
-		if resume {
-			migState = existing
+	if entries, err := os.ReadDir("."); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, ".migrate-state-"+sourceStr+"-") && strings.HasSuffix(name, ".json") {
+				if existing, err := state.Load(name); err == nil {
+					var resume bool
+					survey.AskOne(&survey.Confirm{ //nolint:errcheck
+						Message: fmt.Sprintf("Found incomplete migration from %s (%d sheets done). Resume?",
+							existing.StartedAt.Format("2006-01-02 15:04"), len(existing.CompletedSheets)),
+						Default: true,
+					}, &resume)
+					if resume {
+						migState = existing
+						stateFile = name
+					}
+					break
+				}
+			}
 		}
 	}
 	if migState == nil {
 		migState = &state.MigrationState{Source: sourceStr, StartedAt: time.Now().UTC()}
 	}
 
-	var userMap *transformer.UserMap
+	// User map
+	userMap := transformer.NewUserMap()
 	if userMapPath != "" {
 		f, err := os.Open(userMapPath)
 		if err != nil {
@@ -93,37 +206,42 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("loading user map: %w", err)
 		}
 	}
-	_ = userMap
 
 	opts := extractor.Options{
 		IncludeAttachments: includeAttachments,
 		IncludeComments:    includeComments,
 		IncludeArchived:    includeArchived,
+		CreatedAfter:       createdAfter,
+		UpdatedAfter:       updatedAfter,
+		ExcludeFields:      excludeFields,
 	}
 
+	// Extract all selected projects for preview
 	fmt.Println("\n  Analyzing source data...")
 	var allProjects []model.Project
-	for _, ws := range workspaces {
-		for _, proj := range ws.Projects {
-			if migState.IsCompleted(proj.ID) {
-				fmt.Printf("  ↻ Skipping already-migrated: %s\n", proj.Name)
-				continue
-			}
-			extracted, err := ext.ExtractProject(ctx, ws.ID, proj.ID, opts)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  ⚠  Skipping project %s: %v\n", proj.Name, err)
-				continue
-			}
-			allProjects = append(allProjects, *extracted)
+	for _, ref := range selectedProjects {
+		if migState.IsCompleted(ref.ID) {
+			fmt.Printf("  ↻ Skipping already-migrated: %s\n", ref.Name)
+			continue
 		}
+		extracted, err := ext.ExtractProject(ctx, selectedWorkspace.ID, ref.ID, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠  Skipping project %s: %v\n", ref.Name, err)
+			continue
+		}
+		if len(excludeFields) > 0 {
+			extracted = applyExcludeFields(extracted, excludeFields)
+		}
+		allProjects = append(allProjects, *extracted)
 	}
 
-	summary := preview.Summarize(workspaces)
+	// Preview
+	previewWorkspaces := []model.Workspace{{ID: selectedWorkspace.ID, Name: selectedWorkspace.Name, Projects: allProjects}}
+	summary := preview.Summarize(previewWorkspaces)
 	fmt.Printf(`
 ╔══════════════════════════╗
 ║    Migration Preview     ║
 ╠══════════════════════════╣
-║ Workspaces:    %-9d║
 ║ Sheets:        %-9d║
 ║ Rows:          %-9d║
 ║ Columns:       %-9d║
@@ -131,7 +249,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 ║ Comments:      %-9d║
 ║ Warnings:      %-9d║
 ╚══════════════════════════╝
-`, summary.Workspaces, summary.Sheets, summary.Rows, summary.Columns,
+`, summary.Sheets, summary.Rows, summary.Columns,
 		summary.Attachments, summary.Comments, len(summary.Warnings))
 
 	for _, w := range summary.Warnings {
@@ -147,26 +265,148 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Migrate
 	bar := progressbar.Default(int64(len(allProjects)), "Migrating")
-	for _, proj := range allProjects {
-		sheetID, colMap, err := loader.CreateSheet(ctx, &proj, 0)
+	allSucceeded := true
+	for i := range allProjects {
+		proj := &allProjects[i]
+
+		// Apply value transforms to all cells
+		colTypeByName := make(map[string]model.ColumnType, len(proj.Columns))
+		for _, col := range proj.Columns {
+			colTypeByName[col.Name] = col.Type
+		}
+		for ri := range proj.Rows {
+			for ci := range proj.Rows[ri].Cells {
+				cell := &proj.Rows[ri].Cells[ci]
+				colType := colTypeByName[cell.ColumnName]
+				cell.Value = transformer.TransformCellValue(cell.Value, colType, userMap)
+			}
+		}
+
+		// Apply sheet naming
+		sheetName := applySheetNaming(proj.Name, sourceStr, sheetPrefix, sheetSuffix, sheetTemplate)
+		proj.Name = sheetName
+
+		// Handle conflict check (skip is default — if sheet exists, we'll get an API error and log it)
+		_ = conflictMode // TODO: implement rename/overwrite in loader
+
+		sheetID, colMap, err := loader.CreateSheet(ctx, proj, 0)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", proj.Name, err)
+			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", sheetName, err)
+			allSucceeded = false
+			_ = bar.Add(1)
 			continue
 		}
+
 		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", proj.Name, err)
+			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", sheetName, err)
+			allSucceeded = false
 		}
-		_ = rowIDMap // used for attachments/comments
+
+		// Attachments
+		if includeAttachments {
+			for _, row := range proj.Rows {
+				ssRowID, ok := rowIDMap[row.ID]
+				if !ok {
+					continue
+				}
+				for _, att := range row.Attachments {
+					if att.SizeBytes > 25*1024*1024 {
+						fmt.Fprintf(os.Stderr, "\n  ⚠  Skipping attachment %s (>25MB)\n", att.Name)
+						continue
+					}
+					if err := downloadAndUpload(ctx, loader, sheetID, ssRowID, att); err != nil {
+						fmt.Fprintf(os.Stderr, "\n  ⚠  Attachment %s failed: %v\n", att.Name, err)
+					}
+				}
+			}
+		}
+
+		// Comments
+		if includeComments {
+			for _, row := range proj.Rows {
+				ssRowID, ok := rowIDMap[row.ID]
+				if !ok {
+					continue
+				}
+				for _, comment := range row.Comments {
+					text := fmt.Sprintf("[%s] %s", comment.AuthorName, comment.Body)
+					if err := loader.AddComment(ctx, sheetID, ssRowID, text); err != nil {
+						fmt.Fprintf(os.Stderr, "\n  ⚠  Comment post failed: %v\n", err)
+					}
+				}
+			}
+		}
+
 		migState.MarkCompleted(proj.ID)
 		_ = state.Save(stateFile, migState)
 		_ = bar.Add(1)
 	}
 
 	fmt.Println("\n✓ Migration complete!")
-	_ = os.Remove(stateFile)
+	if allSucceeded {
+		_ = os.Remove(stateFile)
+	} else {
+		fmt.Printf("  State saved to %s for resume.\n", stateFile)
+	}
 	return nil
+}
+
+func applySheetNaming(name, source, prefix, suffix, tmpl string) string {
+	if tmpl != "{project}" && tmpl != "" {
+		name = strings.NewReplacer(
+			"{source}", source,
+			"{project}", name,
+			"{date}", time.Now().Format("2006-01-02"),
+		).Replace(tmpl)
+	}
+	return prefix + name + suffix
+}
+
+func applyExcludeFields(proj *model.Project, exclude []string) *model.Project {
+	excludeSet := make(map[string]bool, len(exclude))
+	for _, f := range exclude {
+		excludeSet[strings.TrimSpace(f)] = true
+	}
+	filtered := make([]model.ColumnDef, 0, len(proj.Columns))
+	for _, col := range proj.Columns {
+		if !excludeSet[col.Name] {
+			filtered = append(filtered, col)
+		}
+	}
+	proj.Columns = filtered
+	for ri := range proj.Rows {
+		filteredCells := make([]model.Cell, 0, len(proj.Rows[ri].Cells))
+		for _, cell := range proj.Rows[ri].Cells {
+			if !excludeSet[cell.ColumnName] {
+				filteredCells = append(filteredCells, cell)
+			}
+		}
+		proj.Rows[ri].Cells = filteredCells
+	}
+	return proj
+}
+
+func downloadAndUpload(ctx context.Context, loader *ssloader.Loader, sheetID, rowID int64, att model.Attachment) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, att.URL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	contentType := att.ContentType
+	if contentType == "" {
+		contentType = resp.Header.Get("Content-Type")
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return loader.UploadAttachment(ctx, sheetID, rowID, att.Name, contentType, resp.Body)
 }
 
 func buildExtractor(source, token string, cmd *cobra.Command) (extractor.Extractor, error) {
