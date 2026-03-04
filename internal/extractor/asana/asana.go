@@ -74,13 +74,34 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 	return ws, nil
 }
 
+func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
+	var resp struct {
+		Data []struct {
+			GID  string `json:"gid"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	path := fmt.Sprintf("/workspaces/%s/projects?opt_fields=gid,name&limit=100", workspaceID)
+	if err := e.get(ctx, path, &resp); err != nil {
+		return nil, err
+	}
+	refs := make([]extractor.ProjectRef, len(resp.Data))
+	for i, p := range resp.Data {
+		refs[i] = extractor.ProjectRef{ID: p.GID, Name: p.Name}
+	}
+	return refs, nil
+}
+
 type asanaTask struct {
-	GID       string `json:"gid"`
-	Name      string `json:"name"`
-	Notes     string `json:"notes"`
-	Completed bool   `json:"completed"`
-	DueOn     string `json:"due_on"`
-	Assignee  *struct {
+	GID        string `json:"gid"`
+	Name       string `json:"name"`
+	Notes      string `json:"notes"`
+	Completed  bool   `json:"completed"`
+	DueOn      string `json:"due_on"`
+	StartOn    string `json:"start_on"`
+	CreatedAt  string `json:"created_at"`
+	ModifiedAt string `json:"modified_at"`
+	Assignee   *struct {
 		GID   string `json:"gid"`
 		Email string `json:"email"`
 	} `json:"assignee"`
@@ -89,8 +110,26 @@ type asanaTask struct {
 }
 
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID string, opts extractor.Options) (*model.Project, error) {
+	// Fetch project name
+	var projResp struct {
+		Data struct {
+			GID  string `json:"gid"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	projName := projectID
+	if err := e.get(ctx, fmt.Sprintf("/projects/%s?opt_fields=gid,name", projectID), &projResp); err == nil {
+		if projResp.Data.Name != "" {
+			projName = projResp.Data.Name
+		}
+	}
+
+	// Fetch tasks
 	var resp struct{ Data []asanaTask `json:"data"` }
-	path := fmt.Sprintf("/projects/%s/tasks?opt_fields=gid,name,notes,completed,due_on,assignee.email,tags.name,parent.gid", projectID)
+	path := fmt.Sprintf("/projects/%s/tasks?opt_fields=gid,name,notes,completed,due_on,start_on,created_at,modified_at,assignee.email,tags.name,parent.gid&limit=100", projectID)
+	if !opts.CreatedAfter.IsZero() {
+		path += fmt.Sprintf("&created_since=%s", opts.CreatedAfter.Format(time.RFC3339))
+	}
 	if err := e.get(ctx, path, &resp); err != nil {
 		return nil, err
 	}
@@ -100,6 +139,9 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		{Name: "Notes", Type: model.TypeText},
 		{Name: "Completed", Type: model.TypeCheckbox},
 		{Name: "Due Date", Type: model.TypeDate},
+		{Name: "Start Date", Type: model.TypeDate},
+		{Name: "Created At", Type: model.TypeDateTime},
+		{Name: "Modified At", Type: model.TypeDateTime},
 		{Name: "Assignee", Type: model.TypeContact},
 		{Name: "Tags", Type: model.TypeMultiSelect},
 	}
@@ -116,6 +158,15 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		}
 		if t.DueOn != "" {
 			cells = append(cells, model.Cell{ColumnName: "Due Date", Value: t.DueOn})
+		}
+		if t.StartOn != "" {
+			cells = append(cells, model.Cell{ColumnName: "Start Date", Value: t.StartOn})
+		}
+		if t.CreatedAt != "" {
+			cells = append(cells, model.Cell{ColumnName: "Created At", Value: t.CreatedAt})
+		}
+		if t.ModifiedAt != "" {
+			cells = append(cells, model.Cell{ColumnName: "Modified At", Value: t.ModifiedAt})
 		}
 		if t.Assignee != nil {
 			cells = append(cells, model.Cell{ColumnName: "Assignee", Value: t.Assignee.Email})
@@ -134,11 +185,5 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		rows = append(rows, model.Row{ID: t.GID, ParentID: parentID, Cells: cells})
 	}
 
-	return &model.Project{ID: projectID, Name: projectID, Columns: columns, Rows: rows}, nil
-}
-
-// ListProjects lists all projects in the given workspace.
-// TODO: Full implementation coming in a later task.
-func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+	return &model.Project{ID: projectID, Name: projName, Columns: columns, Rows: rows}, nil
 }

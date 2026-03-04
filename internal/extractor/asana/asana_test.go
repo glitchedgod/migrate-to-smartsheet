@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
@@ -90,4 +91,47 @@ func TestAsanaExtractProject(t *testing.T) {
 	assert.Equal(t, "proj_1", proj.ID)
 	assert.Len(t, proj.Rows, 1)
 	assert.Equal(t, "First Task", proj.Rows[0].Cells[0].Value)
+}
+
+func TestAsanaListProjects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "/workspaces/ws_1/projects")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"data": []map[string]interface{}{
+				{"gid": "proj_1", "name": "Alpha Project"},
+				{"gid": "proj_2", "name": "Beta Project"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := asanaext.New("fake-token", asanaext.WithBaseURL(srv.URL))
+	projects, err := e.ListProjects(context.Background(), "ws_1")
+	require.NoError(t, err)
+	assert.Len(t, projects, 2)
+	assert.Equal(t, "proj_1", projects[0].ID)
+	assert.Equal(t, "Alpha Project", projects[0].Name)
+}
+
+func TestAsanaExtractProjectHasCorrectName(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		callCount++
+		// First call is for project name, second is for tasks
+		if strings.Contains(r.URL.Path, "/projects/proj_1") && !strings.Contains(r.URL.Path, "/tasks") {
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+				"data": map[string]interface{}{"gid": "proj_1", "name": "My Real Project Name"},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []interface{}{}}) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	e := asanaext.New("fake-token", asanaext.WithBaseURL(srv.URL))
+	proj, err := e.ExtractProject(context.Background(), "ws_1", "proj_1", extractor.Options{})
+	require.NoError(t, err)
+	assert.Equal(t, "My Real Project Name", proj.Name)
 }
