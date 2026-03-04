@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
@@ -56,6 +57,21 @@ func (e *Extractor) get(ctx context.Context, url string, out interface{}) error 
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+type airtableField struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Options *struct {
+		Choices []struct{ Name string `json:"name"` } `json:"choices"`
+	} `json:"options"`
+}
+
+type airtableTable struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Fields []airtableField `json:"fields"`
+}
+
 func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, error) {
 	var resp struct {
 		Bases []struct {
@@ -73,13 +89,117 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 	return ws, nil
 }
 
+func (e *Extractor) ListProjects(ctx context.Context, baseID string) ([]extractor.ProjectRef, error) {
+	var resp struct {
+		Tables []airtableTable `json:"tables"`
+	}
+	if err := e.get(ctx, fmt.Sprintf("%s/meta/bases/%s/tables", e.baseURL, baseID), &resp); err != nil {
+		return nil, err
+	}
+	refs := make([]extractor.ProjectRef, len(resp.Tables))
+	for i, t := range resp.Tables {
+		refs[i] = extractor.ProjectRef{ID: t.ID, Name: t.Name}
+	}
+	return refs, nil
+}
+
+func airtableTypeToCanonical(at string) model.ColumnType {
+	switch at {
+	case "date":
+		return model.TypeDate
+	case "dateTime":
+		return model.TypeDateTime
+	case "checkbox":
+		return model.TypeCheckbox
+	case "singleSelect":
+		return model.TypeSingleSelect
+	case "multipleSelects":
+		return model.TypeMultiSelect
+	case "singleCollaborator", "createdBy", "lastModifiedBy":
+		return model.TypeContact
+	case "multipleCollaborators":
+		return model.TypeMultiContact
+	case "number", "currency", "percent", "duration":
+		return model.TypeNumber
+	default:
+		return model.TypeText
+	}
+}
+
+func extractAirtableValue(v interface{}, fieldType string) interface{} {
+	if v == nil {
+		return nil
+	}
+	switch fieldType {
+	case "multipleSelects":
+		if arr, ok := v.([]interface{}); ok {
+			strs := make([]string, 0, len(arr))
+			for _, item := range arr {
+				if s, ok := item.(string); ok {
+					strs = append(strs, s)
+				}
+			}
+			return strs
+		}
+	case "singleCollaborator", "createdBy", "lastModifiedBy":
+		if m, ok := v.(map[string]interface{}); ok {
+			if email, ok := m["email"].(string); ok {
+				return email
+			}
+		}
+	case "multipleCollaborators":
+		if arr, ok := v.([]interface{}); ok {
+			emails := make([]string, 0)
+			for _, item := range arr {
+				if m, ok := item.(map[string]interface{}); ok {
+					if email, ok := m["email"].(string); ok {
+						emails = append(emails, email)
+					}
+				}
+			}
+			return emails
+		}
+	case "multipleAttachments":
+		if arr, ok := v.([]interface{}); ok {
+			names := make([]string, 0)
+			for _, item := range arr {
+				if m, ok := item.(map[string]interface{}); ok {
+					if name, ok := m["filename"].(string); ok {
+						names = append(names, name)
+					}
+				}
+			}
+			return strings.Join(names, ", ")
+		}
+	}
+	return fmt.Sprintf("%v", v)
+}
+
 func (e *Extractor) ExtractProject(ctx context.Context, baseID, tableID string, opts extractor.Options) (*model.Project, error) {
+	// Fetch schema for typed columns
+	fieldsByName := make(map[string]airtableField)
+	tableName := tableID
+	var schemaResp struct {
+		Tables []airtableTable `json:"tables"`
+	}
+	if err := e.get(ctx, fmt.Sprintf("%s/meta/bases/%s/tables", e.baseURL, baseID), &schemaResp); err == nil {
+		for _, t := range schemaResp.Tables {
+			if t.ID == tableID || t.Name == tableID {
+				tableName = t.Name
+				for _, f := range t.Fields {
+					fieldsByName[f.Name] = f
+				}
+				break
+			}
+		}
+	}
+
+	// Fetch records with pagination
 	var allRecords []struct {
 		ID     string                 `json:"id"`
 		Fields map[string]interface{} `json:"fields"`
 	}
 	url := fmt.Sprintf("%s/%s/%s?pageSize=100", e.baseURL, baseID, tableID)
-
 	for {
 		var resp struct {
 			Records []struct {
@@ -98,31 +218,49 @@ func (e *Extractor) ExtractProject(ctx context.Context, baseID, tableID string, 
 		url = fmt.Sprintf("%s/%s/%s?pageSize=100&offset=%s", e.baseURL, baseID, tableID, *resp.Offset)
 	}
 
-	colSet := map[string]bool{}
-	for _, r := range allRecords {
-		for k := range r.Fields {
-			colSet[k] = true
+	// Build typed columns — from schema if available, else infer from records
+	var colOrder []string
+	colDefs := make(map[string]model.ColumnDef)
+	if len(fieldsByName) > 0 {
+		for name, f := range fieldsByName {
+			choices := make([]string, 0)
+			if f.Options != nil {
+				for _, c := range f.Options.Choices {
+					choices = append(choices, c.Name)
+				}
+			}
+			colDefs[name] = model.ColumnDef{Name: name, Type: airtableTypeToCanonical(f.Type), Options: choices}
+			colOrder = append(colOrder, name)
+		}
+	} else {
+		seen := map[string]bool{}
+		for _, r := range allRecords {
+			for k := range r.Fields {
+				if !seen[k] {
+					seen[k] = true
+					colDefs[k] = model.ColumnDef{Name: k, Type: model.TypeText}
+					colOrder = append(colOrder, k)
+				}
+			}
 		}
 	}
-	columns := make([]model.ColumnDef, 0, len(colSet))
-	for name := range colSet {
-		columns = append(columns, model.ColumnDef{Name: name, Type: model.TypeText})
+	columns := make([]model.ColumnDef, 0, len(colOrder))
+	for _, name := range colOrder {
+		columns = append(columns, colDefs[name])
 	}
 
 	rows := make([]model.Row, 0, len(allRecords))
 	for _, r := range allRecords {
 		cells := make([]model.Cell, 0, len(r.Fields))
-		for k, v := range r.Fields {
-			cells = append(cells, model.Cell{ColumnName: k, Value: fmt.Sprintf("%v", v)})
+		for name, v := range r.Fields {
+			fieldType := ""
+			if f, ok := fieldsByName[name]; ok {
+				fieldType = f.Type
+			}
+			cells = append(cells, model.Cell{ColumnName: name, Value: extractAirtableValue(v, fieldType)})
 		}
 		rows = append(rows, model.Row{ID: r.ID, Cells: cells})
 	}
 
-	return &model.Project{ID: tableID, Name: tableID, Columns: columns, Rows: rows}, nil
-}
-
-// ListProjects lists all projects in the given workspace.
-// TODO: Full implementation coming in a later task.
-func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	return nil, fmt.Errorf("ListProjects not yet implemented for %T", e)
+	return &model.Project{ID: tableID, Name: tableName, Columns: columns, Rows: rows}, nil
 }
