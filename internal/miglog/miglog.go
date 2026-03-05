@@ -126,6 +126,68 @@ func (l *Logger) Summary(sheets, rows, warnings, errors int, status string) {
 		"status", status)
 }
 
+// ErrorEntry represents a single ERROR-level entry read back from the log file.
+type ErrorEntry struct {
+	Sheet   string
+	Message string
+	ErrText string
+}
+
+// ListErrors reads back the NDJSON log file and returns all entries at ERROR level.
+// It opens the file independently of the write-side bufio.Writer so it is safe to
+// call after Close() — or mid-run if the caller has flushed.
+func (l *Logger) ListErrors() []ErrorEntry {
+	f, err := os.Open(l.path)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+
+	var out []ErrorEntry
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		// Use a minimal struct to avoid pulling in all fields.
+		var raw struct {
+			Level  string `json:"level"`
+			Sheet  string `json:"sheet"`
+			Msg    string `json:"msg"`
+			Fields map[string]json.RawMessage `json:"fields"`
+		}
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		if raw.Level != string(LevelError) {
+			continue
+		}
+		// "sheet" may appear as a top-level field (from project) or inside fields.
+		sheet := raw.Sheet
+		if sheet == "" {
+			// Fall back to "project" top-level field used by write().
+			var withProject struct {
+				Project string `json:"project"`
+			}
+			_ = json.Unmarshal(line, &withProject)
+			sheet = withProject.Project
+		}
+		var errText string
+		if raw.Fields != nil {
+			if v, ok := raw.Fields["error"]; ok {
+				_ = json.Unmarshal(v, &errText)
+			}
+		}
+		out = append(out, ErrorEntry{
+			Sheet:   sheet,
+			Message: raw.Msg,
+			ErrText: errText,
+		})
+	}
+	return out
+}
+
 // Close flushes the buffer and closes the underlying file.
 func (l *Logger) Close() error {
 	l.mu.Lock()

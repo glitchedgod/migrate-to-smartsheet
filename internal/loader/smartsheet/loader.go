@@ -88,42 +88,43 @@ func normalizeCellValue(v interface{}) interface{} {
 	}
 }
 
-// CreateWorkspace creates a new Smartsheet workspace and returns its ID.
-// If a workspace with the same name already exists it returns the existing ID.
-func (l *Loader) CreateWorkspace(ctx context.Context, name string) (int64, error) {
+// CreateWorkspace creates a new Smartsheet workspace and returns its ID and permalink.
+// If a workspace with the same name already exists it returns the existing ID and permalink.
+func (l *Loader) CreateWorkspace(ctx context.Context, name string) (int64, string, error) {
 	body, err := json.Marshal(map[string]string{"name": name})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	l.rl.Wait()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.baseURL+"/workspaces", bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+l.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("smartsheet create workspace: %s", readAPIError(resp))
+		return 0, "", fmt.Errorf("smartsheet create workspace: %s", readAPIError(resp))
 	}
 
 	var result struct {
 		ResultCode int `json:"resultCode"`
 		Result     struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name"`
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			Permalink string `json:"permalink"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return result.Result.ID, nil
+	return result.Result.ID, result.Result.Permalink, nil
 }
 
 func readAPIError(resp *http.Response) string {

@@ -19,12 +19,12 @@ import (
 	wrikeext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/wrike"
 	ssloader "github.com/glitchedgod/migrate-to-smartsheet/internal/loader/smartsheet"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/miglog"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/postmigration"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/preview"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/state"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/wizard"
 	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
-	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -243,6 +243,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// Wrike = account ID) get a cleaned-up name; the others get the real workspace name.
 	ssWorkspaceID := int64(0)
 	ssWorkspaceName := selectedWorkspace.Name
+	wsPermalink := ""
 	// For Jira, use a shorter display name derived from the instance URL
 	if sourceStr == "jira" {
 		ssWorkspaceName = strings.TrimPrefix(strings.TrimPrefix(selectedWorkspace.Name, "https://"), "http://")
@@ -252,11 +253,12 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		ssWorkspaceName = selectedWorkspace.Name + " (Airtable)"
 	}
 	if ssWorkspaceName != "" {
-		wsID, wsErr := loader.CreateWorkspace(ctx, ssWorkspaceName)
+		wsID, wsLink, wsErr := loader.CreateWorkspace(ctx, ssWorkspaceName)
 		if wsErr != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠  Could not create Smartsheet workspace %q: %v — sheets will be created at root\n", ssWorkspaceName, wsErr)
 		} else {
 			ssWorkspaceID = wsID
+			wsPermalink = wsLink
 			fmt.Printf("  📁 Smartsheet workspace: %s\n", ssWorkspaceName)
 			if mlog != nil {
 				mlog.Info("smartsheet workspace created", "workspace", ssWorkspaceName, "workspace_id", wsID)
@@ -333,22 +335,17 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		allProjects = append(allProjects, *extracted)
 	}
 
+	// Compute sheet names in the same order as allProjects (needed for mapping preview).
+	sheetNames := make([]string, len(allProjects))
+	for i, proj := range allProjects {
+		sheetNames[i] = applySheetNaming(proj.Name, sourceStr, sheetPrefix, sheetSuffix, sheetTemplate)
+	}
+
 	// Preview
 	previewWorkspaces := []model.Workspace{{ID: selectedWorkspace.ID, Name: selectedWorkspace.Name, Projects: allProjects}}
 	summary := preview.Summarize(previewWorkspaces)
-	fmt.Printf(`
-╔══════════════════════════╗
-║    Migration Preview     ║
-╠══════════════════════════╣
-║ Sheets:        %-9d║
-║ Rows:          %-9d║
-║ Columns:       %-9d║
-║ Attachments:   %-9d║
-║ Comments:      %-9d║
-║ Warnings:      %-9d║
-╚══════════════════════════╝
-`, summary.Sheets, summary.Rows, summary.Columns,
-		summary.Attachments, summary.Comments, len(summary.Warnings))
+
+	printMappingPreview(sourceStr, selectedWorkspace.Name, ssWorkspaceName, allProjects, sheetNames, summary)
 
 	for _, w := range summary.Warnings {
 		fmt.Fprintf(os.Stderr, "  ⚠  %s\n", w)
@@ -363,13 +360,19 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Migrate
-	bar := progressbar.Default(int64(len(allProjects)), "Migrating")
+	// Migrate — per-project live status
+	tracker := newStatusTracker(sheetNames)
+	fmt.Println()
+	fmt.Println("  ─────────────────────────────────────────────────────────────────")
+
 	allSucceeded := true
 	errCount := 0
 	warnCount := len(summary.Warnings)
+	outcomes := make([]postmigration.ProjectOutcome, 0, len(allProjects))
+
 	for i := range allProjects {
 		proj := &allProjects[i]
+		tracker.start(i)
 
 		// Apply value transforms to all cells
 		colTypeByName := make(map[string]model.ColumnType, len(proj.Columns))
@@ -384,8 +387,8 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Apply sheet naming
-		sheetName := applySheetNaming(proj.Name, sourceStr, sheetPrefix, sheetSuffix, sheetTemplate)
+		// Apply sheet naming (already computed in sheetNames[i], update proj.Name to match)
+		sheetName := sheetNames[i]
 		proj.Name = sheetName
 
 		// Deduplicate column names before creating the sheet.
@@ -406,13 +409,20 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 		sheetID, colMap, contactColIDs, err := loader.CreateSheet(ctx, proj, ssWorkspaceID)
 		if err != nil {
+			msg := fmt.Sprintf("sheet create failed: %v", err)
+			tracker.fail(i, msg)
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", sheetName, err)
 			if mlog != nil {
 				mlog.SheetFailed(sheetName, err)
 			}
 			allSucceeded = false
 			errCount++
-			_ = bar.Add(1)
+			outcomes = append(outcomes, postmigration.ProjectOutcome{
+				SourceID:  proj.ID,
+				Name:      proj.Name,
+				SheetName: sheetName,
+				Err:       err,
+			})
 			continue
 		}
 
@@ -424,18 +434,28 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			)
 		}
 
-		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", sheetName, err)
+		rowIDMap, rowErr := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
+		if rowErr != nil {
+			msg := fmt.Sprintf("row insert failed: %v", rowErr)
+			tracker.fail(i, msg)
+			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", sheetName, rowErr)
 			if mlog != nil {
 				mlog.Error("row insert failed",
 					"sheet", sheetName,
 					"sheet_id", sheetID,
-					"error", err.Error(),
+					"error", rowErr.Error(),
 				)
 			}
 			allSucceeded = false
 			errCount++
+			outcomes = append(outcomes, postmigration.ProjectOutcome{
+				SourceID:  proj.ID,
+				Name:      proj.Name,
+				SheetName: sheetName,
+				SheetID:   sheetID,
+				Err:       rowErr,
+			})
+			continue
 		}
 
 		// Attachments
@@ -495,9 +515,25 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			mlog.SheetComplete(sheetName, len(proj.Rows), attachCount, commentCount)
 		}
 
+		noun := platformNoun(sourceStr)
+		completeMsg := fmt.Sprintf("%d %s", len(proj.Rows), noun)
+		if attachCount > 0 {
+			completeMsg += fmt.Sprintf(" · %d attachments", attachCount)
+		}
+		tracker.complete(i, completeMsg)
+
 		migState.MarkCompleted(proj.ID)
 		_ = state.Save(stateFile, migState)
-		_ = bar.Add(1)
+
+		outcomes = append(outcomes, postmigration.ProjectOutcome{
+			SourceID:     proj.ID,
+			Name:         proj.Name,
+			SheetName:    sheetName,
+			SheetID:      sheetID,
+			RowCount:     len(proj.Rows),
+			AttachCount:  attachCount,
+			CommentCount: commentCount,
+		})
 	}
 
 	// Final status
@@ -513,16 +549,225 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		mlog.Summary(len(allProjects), totalRows, warnCount, errCount, status)
 	}
 
-	fmt.Println("\n✓ Migration complete!")
+	// Print completion summary
+	tracker.printAll()
+
+	// State file cleanup
 	if allSucceeded {
 		_ = os.Remove(stateFile)
-	} else {
-		fmt.Printf("  State saved to %s for resume.\n", stateFile)
 	}
+
+	// Build MigrationResult and launch post-migration menu
+	logPath := ""
 	if mlog != nil {
-		fmt.Printf("  📋 Log: %s\n", mlog.FilePath())
+		logPath = mlog.FilePath()
 	}
+	resultStateFile := ""
+	if !allSucceeded {
+		resultStateFile = stateFile
+	}
+	result := postmigration.MigrationResult{
+		Source:             sourceStr,
+		Outcomes:           outcomes,
+		WorkspacePermalink: wsPermalink,
+		WorkspaceName:      ssWorkspaceName,
+		LogPath:            logPath,
+		StateFile:          resultStateFile,
+	}
+	postmigration.RunMenu(result)
+
 	return nil
+}
+
+// ── Mapping preview ────────────────────────────────────────────────────────────
+
+// platformNoun returns the domain noun for items in the given platform.
+func platformNoun(platform string) string {
+	switch strings.ToLower(platform) {
+	case "asana", "wrike":
+		return "tasks"
+	case "monday":
+		return "items"
+	case "trello":
+		return "cards"
+	case "jira":
+		return "issues"
+	case "airtable":
+		return "records"
+	case "notion":
+		return "pages"
+	default:
+		return "rows"
+	}
+}
+
+// printMappingPreview renders the source → destination mapping before asking
+// the user to confirm the migration.
+func printMappingPreview(source, workspaceName, ssWorkspaceName string, projects []model.Project, sheetNames []string, summary preview.Summary) {
+	const sep = "  ─────────────────────────────────────────────────────────────────"
+	noun := platformNoun(source)
+	icon := platformProjectIcon(source)
+
+	// Build a per-project warning lookup from summary.Warnings.
+	// summary.Warnings are global strings; we do a best-effort substring match
+	// to attribute them to specific projects.
+	fmt.Println()
+	fmt.Println("  📦  Migration Map")
+	fmt.Println(sep)
+	fmt.Printf("  📁  %s  →  Smartsheet: %s\n\n", workspaceName, ssWorkspaceName)
+
+	totalRows := 0
+	totalAttach := 0
+	transferableAttach := 0
+
+	for i, proj := range projects {
+		sheetName := ""
+		if i < len(sheetNames) {
+			sheetName = sheetNames[i]
+		}
+
+		rowCount := len(proj.Rows)
+		totalRows += rowCount
+
+		// Count attachments and oversized ones for this project.
+		attCount := 0
+		oversized := 0
+		hasContact := false
+		for _, col := range proj.Columns {
+			if col.Type == model.TypeContact || col.Type == model.TypeMultiContact {
+				hasContact = true
+				break
+			}
+		}
+		for _, row := range proj.Rows {
+			for _, att := range row.Attachments {
+				attCount++
+				if att.SizeBytes > 25*1024*1024 {
+					oversized++
+				}
+			}
+		}
+		totalAttach += attCount
+		transferableAttach += attCount - oversized
+
+		fmt.Printf("      %s  %s\n", icon, proj.Name)
+		fmt.Printf("          → Sheet %q\n", sheetName)
+
+		// Build the detail line
+		detailParts := []string{fmt.Sprintf("%d %s", rowCount, noun)}
+		if attCount > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("%d attachments", attCount))
+		}
+		if hasContact {
+			detailParts = append(detailParts, "contact columns")
+		}
+		fmt.Printf("             %s\n", strings.Join(detailParts, " · "))
+
+		// Per-project warning for oversized attachments
+		if oversized > 0 {
+			fmt.Printf("             ⚠  %d attachment(s) >25MB will be skipped\n", oversized)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println(sep)
+
+	// Summary line
+	summaryParts := []string{
+		fmt.Sprintf("%d sheets", len(projects)),
+		fmt.Sprintf("%d %s", totalRows, noun),
+	}
+	if totalAttach > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d attachments transferable", transferableAttach))
+	}
+	if len(summary.Warnings) > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d warnings", len(summary.Warnings)))
+	}
+	fmt.Printf("  %s\n", strings.Join(summaryParts, " · "))
+}
+
+// ── Per-project live status tracker ───────────────────────────────────────────
+
+type projectStatus int
+
+const (
+	statusPending   projectStatus = iota
+	statusMigrating               //nolint:deadcode,varcheck
+	statusDone
+	statusFailed
+)
+
+type statusTracker struct {
+	names    []string
+	statuses []projectStatus
+	msgs     []string
+	total    int
+}
+
+func newStatusTracker(names []string) *statusTracker {
+	t := &statusTracker{
+		names:    names,
+		statuses: make([]projectStatus, len(names)),
+		msgs:     make([]string, len(names)),
+		total:    len(names),
+	}
+	return t
+}
+
+// start prints the "currently migrating" line for project i.
+func (t *statusTracker) start(i int) {
+	t.statuses[i] = statusMigrating
+	fmt.Printf("  ⟳  %s...\n", t.names[i])
+}
+
+// complete marks project i as done and prints its completion line.
+func (t *statusTracker) complete(i int, msg string) {
+	t.statuses[i] = statusDone
+	t.msgs[i] = msg
+}
+
+// fail marks project i as failed and prints the failure line immediately.
+func (t *statusTracker) fail(i int, msg string) {
+	t.statuses[i] = statusFailed
+	t.msgs[i] = msg
+}
+
+// printAll prints the final per-project summary table.
+func (t *statusTracker) printAll() {
+	const sep = "  ─────────────────────────────────────────────────────────────────"
+	const (
+		ansiReset = "\033[0m"
+		ansiRed   = "\033[31m"
+		ansiGreen = "\033[32m"
+	)
+
+	fmt.Println()
+	fmt.Println(sep)
+	succeeded := 0
+	failed := 0
+	for i, name := range t.names {
+		switch t.statuses[i] {
+		case statusDone:
+			succeeded++
+			if t.msgs[i] != "" {
+				fmt.Printf("  %s✓%s  %-40s  %s\n", ansiGreen, ansiReset, name, t.msgs[i])
+			} else {
+				fmt.Printf("  %s✓%s  %s\n", ansiGreen, ansiReset, name)
+			}
+		case statusFailed:
+			failed++
+			if t.msgs[i] != "" {
+				fmt.Printf("  %s✗%s  %-40s  %s\n", ansiRed, ansiReset, name, t.msgs[i])
+			} else {
+				fmt.Printf("  %s✗%s  %s\n", ansiRed, ansiReset, name)
+			}
+		default:
+			fmt.Printf("  ·  %s\n", name)
+		}
+	}
+	fmt.Println()
+	fmt.Printf("  Migration complete  ·  %d of %d sheets\n", succeeded, t.total)
+	fmt.Println(sep)
 }
 
 func applySheetNaming(name, source, prefix, suffix, tmpl string) string {

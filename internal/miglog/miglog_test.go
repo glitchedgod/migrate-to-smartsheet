@@ -83,3 +83,66 @@ func TestLoggerFilePath(t *testing.T) {
 	defer func() { _ = lg.Close() }()
 	assert.Equal(t, path, lg.FilePath())
 }
+
+func TestListErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "errors.log")
+	lg, err := miglog.New(path, "airtable")
+	require.NoError(t, err)
+
+	lg.Info("migration started")
+	lg.SheetStart("ProjectA", 3, 50)
+	lg.SheetFailed("ProjectA", fmt.Errorf("API rate limit exceeded"))
+	lg.Warn("attachment skipped", "name", "file.pdf", "reason", "too large")
+	lg.AttachmentFailed("ProjectB", "image.png", fmt.Errorf("upload timeout"))
+	lg.CommentFailed("ProjectC", fmt.Errorf("403 Forbidden"))
+	lg.SheetComplete("ProjectD", 10, 0, 0)
+	lg.Summary(2, 60, 1, 2, "partial")
+
+	require.NoError(t, lg.Close())
+
+	errs := lg.ListErrors()
+	require.Len(t, errs, 3)
+
+	// SheetFailed entry
+	assert.Equal(t, "ProjectA", errs[0].Sheet)
+	assert.Equal(t, "sheet migration failed", errs[0].Message)
+	assert.Equal(t, "API rate limit exceeded", errs[0].ErrText)
+
+	// AttachmentFailed entry
+	assert.Equal(t, "ProjectB", errs[1].Sheet)
+	assert.Equal(t, "attachment upload failed", errs[1].Message)
+	assert.Equal(t, "upload timeout", errs[1].ErrText)
+
+	// CommentFailed entry
+	assert.Equal(t, "ProjectC", errs[2].Sheet)
+	assert.Equal(t, "comment post failed", errs[2].Message)
+	assert.Equal(t, "403 Forbidden", errs[2].ErrText)
+}
+
+func TestListErrorsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "noerrors.log")
+	lg, err := miglog.New(path, "trello")
+	require.NoError(t, err)
+
+	lg.Info("all good")
+	lg.SheetComplete("Clean", 5, 0, 0)
+	lg.Summary(1, 5, 0, 0, "success")
+	require.NoError(t, lg.Close())
+
+	errs := lg.ListErrors()
+	assert.Empty(t, errs)
+}
+
+func TestListErrorsMissingFile(t *testing.T) {
+	// Logger pointing at a path that doesn't exist after Close — simulate by
+	// using a path that was never created.
+	path := filepath.Join(t.TempDir(), "ghost.log")
+	lg, err := miglog.New(path, "wrike")
+	require.NoError(t, err)
+	require.NoError(t, lg.Close())
+	// Remove the file to simulate a missing log
+	require.NoError(t, os.Remove(path))
+
+	errs := lg.ListErrors()
+	assert.Nil(t, errs)
+}

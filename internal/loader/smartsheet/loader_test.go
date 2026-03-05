@@ -15,6 +15,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCreateWorkspace(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "POST", r.Method)
+		assert.Equal(t, "/workspaces", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"resultCode": 0,
+			"result": map[string]interface{}{
+				"id":        float64(777888999),
+				"name":      "My Workspace",
+				"permalink": "https://app.smartsheet.com/workspaces/xyz789",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	wsID, permalink, err := loader.CreateWorkspace(context.Background(), "My Workspace")
+	require.NoError(t, err)
+	assert.Equal(t, int64(777888999), wsID)
+	assert.Equal(t, "https://app.smartsheet.com/workspaces/xyz789", permalink)
+}
+
+func TestCreateWorkspaceAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("bad-token", smartsheet.WithBaseURL(srv.URL))
+	_, _, err := loader.CreateWorkspace(context.Background(), "Workspace")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
+}
+
 func TestCreateSheet(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "POST", r.Method)
