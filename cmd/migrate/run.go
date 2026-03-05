@@ -304,7 +304,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		// Handle conflict check (skip is default — if sheet exists, we'll get an API error and log it)
 		_ = conflictMode // TODO: implement rename/overwrite in loader
 
-		sheetID, colMap, err := loader.CreateSheet(ctx, proj, 0)
+		sheetID, colMap, contactColIDs, err := loader.CreateSheet(ctx, proj, 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", sheetName, err)
 			allSucceeded = false
@@ -312,7 +312,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap)
+		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", sheetName, err)
 			allSucceeded = false

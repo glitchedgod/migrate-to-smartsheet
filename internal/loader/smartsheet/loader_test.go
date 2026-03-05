@@ -43,7 +43,7 @@ func TestCreateSheet(t *testing.T) {
 			{Name: "Status", Type: model.TypeSingleSelect, Options: []string{"Todo", "Done"}},
 		},
 	}
-	sheetID, colMap, err := loader.CreateSheet(context.Background(), proj, 0)
+	sheetID, colMap, _, err := loader.CreateSheet(context.Background(), proj, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(123456789), sheetID)
 	assert.Equal(t, int64(11111), colMap["Name"])
@@ -115,7 +115,7 @@ func TestBulkInsertRows(t *testing.T) {
 	}
 	colMap := map[string]int64{"Name": 11111}
 
-	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, rows, colMap)
+	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, rows, colMap, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1001), rowIDMap["src_1"])
 	assert.Equal(t, int64(1002), rowIDMap["src_2"])
@@ -123,7 +123,7 @@ func TestBulkInsertRows(t *testing.T) {
 
 func TestBulkInsertRowsEmpty(t *testing.T) {
 	loader := smartsheet.New("fake-token")
-	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, []model.Row{}, map[string]int64{})
+	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, []model.Row{}, map[string]int64{}, nil)
 	require.NoError(t, err)
 	assert.Empty(t, rowIDMap)
 }
@@ -154,7 +154,7 @@ func TestBulkInsertRowsHierarchy(t *testing.T) {
 		{ID: "child_1", ParentID: "parent_1", Cells: []model.Cell{{ColumnName: "Name", Value: "Child"}}},
 	}
 
-	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
+	rowIDMap, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111}, nil)
 	require.NoError(t, err)
 	assert.Len(t, receivedBodies, 2, "should have made 2 separate insert calls")
 	assert.Equal(t, int64(9001), rowIDMap["parent_1"])
@@ -173,7 +173,7 @@ func TestCreateSheetAPIError(t *testing.T) {
 		Name:    "Test",
 		Columns: []model.ColumnDef{{Name: "Name", Type: model.TypeText}},
 	}
-	_, _, err := loader.CreateSheet(context.Background(), proj, 0)
+	_, _, _, err := loader.CreateSheet(context.Background(), proj, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
 }
@@ -193,7 +193,7 @@ func TestCreateSheetNonZeroResultCode(t *testing.T) {
 		Name:    "Test",
 		Columns: []model.ColumnDef{{Name: "Name", Type: model.TypeText}},
 	}
-	_, _, err := loader.CreateSheet(context.Background(), proj, 0)
+	_, _, _, err := loader.CreateSheet(context.Background(), proj, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "resultCode=3")
 }
@@ -206,7 +206,7 @@ func TestBulkInsertRowsHTTPError(t *testing.T) {
 
 	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
 	rows := []model.Row{{ID: "r1", Cells: []model.Cell{{ColumnName: "Name", Value: "Task"}}}}
-	_, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111})
+	_, err := loader.BulkInsertRows(context.Background(), 123456789, rows, map[string]int64{"Name": 111}, nil)
 	assert.Error(t, err)
 }
 
@@ -225,7 +225,7 @@ func TestLoaderHasRateLimiter(t *testing.T) {
 
 	loader := smartsheet.New("token", smartsheet.WithBaseURL(srv.URL))
 	proj := &model.Project{Name: "Test", Columns: []model.ColumnDef{{Name: "Name", Type: model.TypeText}}}
-	sheetID, _, err := loader.CreateSheet(context.Background(), proj, 0)
+	sheetID, _, _, err := loader.CreateSheet(context.Background(), proj, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), sheetID)
 }

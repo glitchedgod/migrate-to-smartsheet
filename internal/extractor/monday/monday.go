@@ -211,7 +211,9 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 		rows = append(rows, model.Row{ID: it.ID, Cells: cells})
 	}
 
-	return &model.Project{ID: boardID, Name: board.Name, Columns: columns, Rows: rows}, nil
+	proj := &model.Project{ID: boardID, Name: board.Name, Columns: columns, Rows: rows}
+	extractor.PopulateSelectOptions(proj)
+	return proj, nil
 }
 
 // ListProjects lists all boards in the given workspace.

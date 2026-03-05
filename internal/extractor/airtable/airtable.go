@@ -130,6 +130,10 @@ func extractAirtableValue(v interface{}, fieldType string) interface{} {
 		return nil
 	}
 	switch fieldType {
+	case "aiText", "formula", "rollup", "lookup", "count":
+		// Computed/AI fields return structured objects — skip them to avoid
+		// raw Go map representation appearing as cell values.
+		return nil
 	case "multipleSelects":
 		if arr, ok := v.([]interface{}); ok {
 			strs := make([]string, 0, len(arr))
@@ -279,5 +283,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, baseID, tableID string, 
 		rows = append(rows, model.Row{ID: r.ID, Cells: cells, Attachments: attachments})
 	}
 
-	return &model.Project{ID: tableID, Name: tableName, Columns: columns, Rows: rows}, nil
+	proj := &model.Project{ID: tableID, Name: tableName, Columns: columns, Rows: rows}
+	extractor.PopulateSelectOptions(proj)
+	return proj, nil
 }

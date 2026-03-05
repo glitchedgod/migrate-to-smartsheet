@@ -260,7 +260,9 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, databaseID 
 		rows = append(rows, model.Row{ID: id, Cells: cells})
 	}
 
-	return &model.Project{ID: databaseID, Name: dbName, Columns: columns, Rows: rows}, nil
+	proj := &model.Project{ID: databaseID, Name: dbName, Columns: columns, Rows: rows}
+	extractor.PopulateSelectOptions(proj)
+	return proj, nil
 }
 
 func extractNotionPropValue(prop interface{}) interface{} {

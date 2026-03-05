@@ -159,7 +159,9 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey 
 		rows = append(rows, model.Row{ID: issue.ID, Cells: cells})
 	}
 
-	return &model.Project{ID: projectKey, Name: projectKey, Columns: columns, Rows: rows}, nil
+	proj := &model.Project{ID: projectKey, Name: projectKey, Columns: columns, Rows: rows}
+	extractor.PopulateSelectOptions(proj)
+	return proj, nil
 }
 
 // ListProjects lists all projects accessible to the configured credentials.

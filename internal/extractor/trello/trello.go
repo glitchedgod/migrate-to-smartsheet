@@ -190,5 +190,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		rows = append(rows, model.Row{ID: c.ID, Cells: cells})
 	}
 
-	return &model.Project{ID: projectID, Name: boardName, Columns: columns, Rows: rows}, nil
+	proj := &model.Project{ID: projectID, Name: boardName, Columns: columns, Rows: rows}
+	extractor.PopulateSelectOptions(proj)
+	return proj, nil
 }

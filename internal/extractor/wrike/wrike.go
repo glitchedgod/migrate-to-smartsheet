@@ -173,7 +173,9 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID st
 		rows = append(rows, model.Row{ID: t.ID, ParentID: parentID, Cells: cells})
 	}
 
-	return &model.Project{ID: folderID, Name: folderName, Columns: columns, Rows: rows}, nil
+	proj := &model.Project{ID: folderID, Name: folderName, Columns: columns, Rows: rows}
+	extractor.PopulateSelectOptions(proj)
+	return proj, nil
 }
 
 // ListProjects lists all project-folders in the given account/workspace.

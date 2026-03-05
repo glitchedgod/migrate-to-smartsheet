@@ -15,9 +15,44 @@ import (
 	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 )
 
+// contactCell builds a cellPayload using objectValue for a CONTACT_LIST column.
+// The value may be a single email string, a []string of emails, or a
+// map[string]interface{} with an "email" key.
+func contactCell(colID int64, v interface{}) cellPayload {
+	switch val := v.(type) {
+	case string:
+		if val != "" {
+			return cellPayload{ColumnID: colID, ObjectValue: contactObject{ObjectType: "CONTACT", Email: val}}
+		}
+	case []string:
+		if len(val) > 0 {
+			// Smartsheet CONTACT_LIST accepts a single contact objectValue.
+			// For multiple contacts, use the first email.
+			return cellPayload{ColumnID: colID, ObjectValue: contactObject{ObjectType: "CONTACT", Email: val[0]}}
+		}
+	case []interface{}:
+		for _, item := range val {
+			if m, ok := item.(map[string]interface{}); ok {
+				if email, ok := m["email"].(string); ok && email != "" {
+					return cellPayload{ColumnID: colID, ObjectValue: contactObject{ObjectType: "CONTACT", Email: email}}
+				}
+			}
+			if s, ok := item.(string); ok && s != "" {
+				return cellPayload{ColumnID: colID, ObjectValue: contactObject{ObjectType: "CONTACT", Email: s}}
+			}
+		}
+	case map[string]interface{}:
+		if email, ok := val["email"].(string); ok && email != "" {
+			return cellPayload{ColumnID: colID, ObjectValue: contactObject{ObjectType: "CONTACT", Email: email}}
+		}
+	}
+	return cellPayload{ColumnID: colID} // empty cell
+}
+
 // normalizeCellValue converts Go types that Smartsheet cannot parse into
 // types it accepts. Smartsheet cell values must be string, number, or bool.
-// Slices are joined as comma-separated strings; anything else is fmt.Sprintf'd.
+// Slices are joined as comma-separated strings; contact maps are resolved to
+// their email field; anything else is fmt.Sprintf'd.
 func normalizeCellValue(v interface{}) interface{} {
 	if v == nil {
 		return nil
@@ -27,9 +62,23 @@ func normalizeCellValue(v interface{}) interface{} {
 		return v
 	case []string:
 		return strings.Join(val, ", ")
+	case map[string]interface{}:
+		// Contact objects from Notion/Jira/Airtable look like {"email": "..."}.
+		// Extract the email if present; otherwise fall through to fmt.Sprintf.
+		if email, ok := val["email"].(string); ok && email != "" {
+			return email
+		}
+		return fmt.Sprintf("%v", val)
 	case []interface{}:
 		parts := make([]string, 0, len(val))
 		for _, item := range val {
+			// Each item may itself be a contact map — resolve it too.
+			if m, ok := item.(map[string]interface{}); ok {
+				if email, ok := m["email"].(string); ok && email != "" {
+					parts = append(parts, email)
+					continue
+				}
+			}
 			parts = append(parts, fmt.Sprintf("%v", item))
 		}
 		return strings.Join(parts, ", ")
@@ -95,15 +144,11 @@ type createSheetResponse struct {
 	} `json:"result"`
 }
 
-// contactColumnSuffix is appended to contact-type column names that we fall back
-// to TEXT_NUMBER, to prevent Smartsheet from auto-classifying them as CONTACT_LIST.
-const contactColumnSuffix = " (text)"
-
-func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspaceID int64) (int64, map[string]int64, error) {
-	// originalNames maps the suffixed column title back to the extractor's original name,
-	// so that colMap returned to the caller uses original names as keys.
-	originalNames := map[string]string{}
-
+// CreateSheet creates a new sheet and returns:
+//   - sheet ID
+//   - map of column title → column ID
+//   - set of column IDs that are CONTACT_LIST (cells must use objectValue)
+func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspaceID int64) (int64, map[string]int64, map[int64]bool, error) {
 	cols := make([]columnPayload, 0, len(proj.Columns))
 	for i, c := range proj.Columns {
 		ssType := transformer.ToSmartsheetColumnType(c.Type)
@@ -111,23 +156,16 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 		if (ssType == "PICKLIST" || ssType == "MULTI_PICKLIST") && len(c.Options) == 0 {
 			ssType = "TEXT_NUMBER"
 		}
-		// Smartsheet auto-classifies columns named "Owner", "Assigned To", etc. as
-		// CONTACT_LIST regardless of the requested type — even TEXT_NUMBER — and then
-		// rejects plain string values with errorCode 1235. Append a suffix to the title
-		// so Smartsheet treats it as a plain text column, while still mapping cells
-		// from extractors (which use the original name) correctly.
-		colTitle := c.Name
-		if ssType == "CONTACT_LIST" || c.Type == model.TypeContact || c.Type == model.TypeMultiContact {
-			ssType = "TEXT_NUMBER"
-			colTitle = c.Name + contactColumnSuffix
-			originalNames[colTitle] = c.Name
-		}
 		// Smartsheet does not support DATETIME as a column type — use DATE instead.
 		if ssType == "DATETIME" {
 			ssType = "DATE"
 		}
+		// MULTI_CONTACT_LIST is not supported; use CONTACT_LIST.
+		if ssType == "MULTI_CONTACT_LIST" {
+			ssType = "CONTACT_LIST"
+		}
 		cp := columnPayload{
-			Title:   colTitle,
+			Title:   c.Name,
 			Type:    ssType,
 			Options: c.Options,
 		}
@@ -139,7 +177,7 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 
 	body, err := json.Marshal(map[string]interface{}{"name": proj.Name, "columns": cols})
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 
 	url := l.baseURL + "/sheets"
@@ -150,45 +188,50 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 	l.rl.Wait()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+l.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
-		return 0, nil, fmt.Errorf("smartsheet create sheet: %s", readAPIError(resp))
+		return 0, nil, nil, fmt.Errorf("smartsheet create sheet: %s", readAPIError(resp))
 	}
 
 	var result createSheetResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	if result.ResultCode != 0 {
-		return 0, nil, fmt.Errorf("smartsheet create sheet failed, resultCode=%d", result.ResultCode)
+		return 0, nil, nil, fmt.Errorf("smartsheet create sheet failed, resultCode=%d", result.ResultCode)
 	}
 
 	colMap := make(map[string]int64, len(result.Result.Columns))
+	contactColIDs := map[int64]bool{}
 	for _, c := range result.Result.Columns {
-		// Map by suffixed title first.
 		colMap[c.Title] = c.ID
-		// If this column had a suffix added, also map by the original name so that
-		// extractor cell lookups (which use the original column name) still resolve.
-		if orig, ok := originalNames[c.Title]; ok {
-			colMap[orig] = c.ID
+		if c.Type == "CONTACT_LIST" {
+			contactColIDs[c.ID] = true
 		}
 	}
-	return result.Result.ID, colMap, nil
+	return result.Result.ID, colMap, contactColIDs, nil
 }
 
 type cellPayload struct {
-	ColumnID int64       `json:"columnId"`
-	Value    interface{} `json:"value"`
+	ColumnID    int64       `json:"columnId"`
+	Value       interface{} `json:"value,omitempty"`
+	ObjectValue interface{} `json:"objectValue,omitempty"`
+}
+
+type contactObject struct {
+	ObjectType string `json:"objectType"`
+	Email      string `json:"email"`
+	Name       string `json:"name,omitempty"`
 }
 
 type rowPayload struct {
@@ -204,13 +247,11 @@ type insertRowsResponse struct {
 }
 
 // BulkInsertRows inserts rows in batches of 500.
-// Rows with ParentID are inserted in a second pass after top-level rows,
-// with parentId set to the Smartsheet ID returned from the first pass.
+// contactColIDs identifies columns that require objectValue (CONTACT_LIST).
 // Returns a map of source row ID → Smartsheet row ID.
-func (l *Loader) BulkInsertRows(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64) (map[string]int64, error) {
+func (l *Loader) BulkInsertRows(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, contactColIDs map[int64]bool) (map[string]int64, error) {
 	rowIDMap := make(map[string]int64)
 
-	// Separate top-level and child rows
 	var topLevel, children []model.Row
 	for _, r := range rows {
 		if r.ParentID == "" {
@@ -220,27 +261,24 @@ func (l *Loader) BulkInsertRows(ctx context.Context, sheetID int64, rows []model
 		}
 	}
 
-	// Pass 1: insert top-level rows
-	if err := l.insertInBatches(ctx, sheetID, topLevel, colIndexByName, rowIDMap, nil); err != nil {
+	if err := l.insertInBatches(ctx, sheetID, topLevel, colIndexByName, contactColIDs, rowIDMap, nil); err != nil {
 		return rowIDMap, err
 	}
-
-	// Pass 2: insert child rows with resolved parentId
-	if err := l.insertInBatches(ctx, sheetID, children, colIndexByName, rowIDMap, rowIDMap); err != nil {
+	if err := l.insertInBatches(ctx, sheetID, children, colIndexByName, contactColIDs, rowIDMap, rowIDMap); err != nil {
 		return rowIDMap, err
 	}
 
 	return rowIDMap, nil
 }
 
-func (l *Loader) insertInBatches(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, rowIDMap map[string]int64, parentIDMap map[string]int64) error {
+func (l *Loader) insertInBatches(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, contactColIDs map[int64]bool, rowIDMap map[string]int64, parentIDMap map[string]int64) error {
 	const batchSize = 500
 	for i := 0; i < len(rows); i += batchSize {
 		end := i + batchSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		batchMap, err := l.insertRowBatch(ctx, sheetID, rows[i:end], colIndexByName, parentIDMap)
+		batchMap, err := l.insertRowBatch(ctx, sheetID, rows[i:end], colIndexByName, contactColIDs, parentIDMap)
 		if err != nil {
 			return fmt.Errorf("batch %d: %w", i/batchSize, err)
 		}
@@ -326,7 +364,7 @@ func (l *Loader) AddComment(ctx context.Context, sheetID, rowID int64, text stri
 	return nil
 }
 
-func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, parentIDMap map[string]int64) (map[string]int64, error) {
+func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model.Row, colIndexByName map[string]int64, contactColIDs map[int64]bool, parentIDMap map[string]int64) (map[string]int64, error) {
 	rowPayloads := make([]rowPayload, 0, len(rows))
 	for _, r := range rows {
 		cells := make([]cellPayload, 0, len(r.Cells))
@@ -335,7 +373,20 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 			if !ok {
 				continue
 			}
-			cells = append(cells, cellPayload{ColumnID: colID, Value: normalizeCellValue(c.Value)})
+			if contactColIDs[colID] {
+				// CONTACT_LIST columns require objectValue format.
+				cp := contactCell(colID, c.Value)
+				if cp.ObjectValue == nil {
+					continue // skip empty contact cells — sending no value/objectValue causes 1012
+				}
+				cells = append(cells, cp)
+			} else {
+				v := normalizeCellValue(c.Value)
+				if v == nil {
+					continue // skip nil-value cells
+				}
+				cells = append(cells, cellPayload{ColumnID: colID, Value: v})
+			}
 		}
 		rp := rowPayload{ToBottom: true, Cells: cells}
 		if parentIDMap != nil && r.ParentID != "" {
