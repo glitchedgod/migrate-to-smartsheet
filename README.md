@@ -23,22 +23,39 @@ Migrate data from project management tools into Smartsheet. Single binary. Non-d
 
 **Download a pre-built binary** (recommended):
 
-Go to [Releases](https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest) and download the archive for your platform:
-
-| Platform | File |
-|---|---|
-| macOS Apple Silicon | `migrate-to-smartsheet_*_darwin_arm64.tar.gz` |
-| macOS Intel | `migrate-to-smartsheet_*_darwin_amd64.tar.gz` |
-| Linux amd64 | `migrate-to-smartsheet_*_linux_amd64.tar.gz` |
-| Linux arm64 | `migrate-to-smartsheet_*_linux_arm64.tar.gz` |
-| Windows | `migrate-to-smartsheet_*_windows_amd64.zip` |
-
-Then extract and run:
+**macOS (Apple Silicon)**
 ```bash
-# macOS / Linux
-tar -xzf migrate-to-smartsheet_*_darwin_arm64.tar.gz
+curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_darwin_arm64.tar.gz | tar -xz
 chmod +x migrate-to-smartsheet
 ./migrate-to-smartsheet
+```
+
+**macOS (Intel)**
+```bash
+curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_darwin_amd64.tar.gz | tar -xz
+chmod +x migrate-to-smartsheet
+./migrate-to-smartsheet
+```
+
+**Linux (amd64)**
+```bash
+curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_linux_amd64.tar.gz | tar -xz
+chmod +x migrate-to-smartsheet
+./migrate-to-smartsheet
+```
+
+**Linux (arm64)**
+```bash
+curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_linux_arm64.tar.gz | tar -xz
+chmod +x migrate-to-smartsheet
+./migrate-to-smartsheet
+```
+
+**Windows (PowerShell)**
+```powershell
+Invoke-WebRequest -Uri https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_windows_amd64.zip -OutFile migrate.zip
+Expand-Archive migrate.zip .
+.\migrate-to-smartsheet.exe
 ```
 
 **Build from source** (requires Go 1.22+):
