@@ -35,13 +35,17 @@ irm https://raw.githubusercontent.com/glitchedgod/migrate-to-smartsheet/main/ins
 
 Or download a specific platform archive directly from [Releases](https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest).
 
-**Build from source** (requires Go 1.22+):
+<details>
+<summary>Build from source (for contributors)</summary>
+
+Requires Go 1.22+:
 ```bash
 git clone https://github.com/glitchedgod/migrate-to-smartsheet
 cd migrate-to-smartsheet
 go build -o migrate-to-smartsheet ./cmd/migrate/
-./migrate-to-smartsheet
+migrate-to-smartsheet
 ```
+</details>
 
 ---
 
@@ -52,7 +56,7 @@ go build -o migrate-to-smartsheet ./cmd/migrate/
 Just run the binary with no flags:
 
 ```bash
-./migrate-to-smartsheet
+migrate-to-smartsheet
 ```
 
 The tool will:
@@ -68,7 +72,7 @@ The tool will:
 Pass all credentials via flags and use `--yes` to skip prompts:
 
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source asana \
   --source-token "$ASANA_TOKEN" \
   --smartsheet-token "$SS_TOKEN" \
@@ -81,7 +85,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Asana**
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source asana \
   --source-token "1/xxxxxxxxxxxxx:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   --smartsheet-token "your-smartsheet-token" \
@@ -90,7 +94,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Monday.com**
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source monday \
   --source-token "eyJhbGciOiJIUzI1NiJ9..." \
   --smartsheet-token "your-smartsheet-token" \
@@ -99,7 +103,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Trello** (requires both API key and OAuth token)
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source trello \
   --source-key "your-api-key" \
   --source-token "your-oauth-token" \
@@ -109,7 +113,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Jira Cloud** (requires instance URL and email)
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source jira \
   --source-token "your-api-token" \
   --jira-email "you@yourorg.com" \
@@ -120,7 +124,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Airtable**
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source airtable \
   --source-token "patXXXXXXXXXXXXXX.xxxxxxxx" \
   --smartsheet-token "your-smartsheet-token" \
@@ -129,7 +133,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Notion**
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source notion \
   --source-token "ntn_xxxxxxxxxxxxx" \
   --smartsheet-token "your-smartsheet-token" \
@@ -138,7 +142,7 @@ Pass all credentials via flags and use `--yes` to skip prompts:
 
 **Wrike**
 ```bash
-./migrate-to-smartsheet \
+migrate-to-smartsheet \
   --source wrike \
   --source-token "your-permanent-token" \
   --smartsheet-token "your-smartsheet-token" \

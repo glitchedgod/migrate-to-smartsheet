@@ -66,6 +66,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Splash screen — shown once in interactive mode
+	if !yes {
+		printSplash()
+	}
+
 	// Interactive prompts for missing required values — skip when --yes or non-TTY
 	if sourceStr == "" && !yes {
 		survey.AskOne(&survey.Select{ //nolint:errcheck
@@ -604,4 +609,42 @@ func buildExtractor(source, token string, cmd *cobra.Command) (extractor.Extract
 	default:
 		return nil, fmt.Errorf("unsupported source: %q", source)
 	}
+}
+
+func printSplash() {
+	const (
+		reset   = "\033[0m"
+		bold    = "\033[1m"
+		cyan    = "\033[1;36m"
+		green   = "\033[1;32m"
+		yellow  = "\033[1;33m"
+		dim     = "\033[2m"
+		white   = "\033[1;37m"
+		bgCyan  = "\033[46m"
+		fgBlack = "\033[30m"
+	)
+
+	fmt.Println()
+
+	// Wordmark — clean, no box-drawing clutter
+	fmt.Println(bold + cyan + `   ╔╦╗╦╔═╗╦═╗╔═╗╔╦╗╔═╗` + reset + `  ` + bold + fgBlack + bgCyan + ` → SMARTSHEET ` + reset)
+	fmt.Println(bold + cyan + `   ║║║║║ ╦╠╦╝╠═╣ ║ ║╣ ` + reset)
+	fmt.Println(bold + cyan + `   ╩ ╩╩╚═╝╩╚═╩ ╩ ╩ ╚═╝` + reset + `  ` + dim + `v` + version + reset)
+	fmt.Println()
+
+	// Tagline — short, punchy, tells you exactly what it does
+	fmt.Println(white + bold + `   Migrate your projects into Smartsheet.` + reset)
+	fmt.Println(dim + `   Asana · Monday · Trello · Jira · Airtable · Notion · Wrike` + reset)
+	fmt.Println()
+
+	// Trust signals — one line each, scannable
+	fmt.Println(`   ` + green + `✓` + reset + dim + `  Non-destructive — your source data is never modified` + reset)
+	fmt.Println(`   ` + green + `✓` + reset + dim + `  Resumable — interrupted? pick up where you left off` + reset)
+	fmt.Println(`   ` + green + `✓` + reset + dim + `  Full fidelity — dates, dropdowns, contacts, attachments` + reset)
+	fmt.Println()
+
+	// Soft separator + attribution
+	fmt.Println(`   ` + dim + `────────────────────────────────────────────────────` + reset)
+	fmt.Println(`   ` + dim + yellow + `github.com/glitchedgod/migrate-to-smartsheet` + reset)
+	fmt.Println()
 }

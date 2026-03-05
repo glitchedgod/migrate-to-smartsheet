@@ -17,12 +17,23 @@ $Filename = "${Binary}_${Version}_windows_${Arch}.zip"
 $Url = "https://github.com/$Repo/releases/download/v$Version/$Filename"
 $ZipPath = "$env:TEMP\migrate.zip"
 
+$InstallDir = "$env:LOCALAPPDATA\Programs\migrate-to-smartsheet"
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
 Invoke-WebRequest -Uri $Url -OutFile $ZipPath
-Expand-Archive -Path $ZipPath -DestinationPath . -Force
+Expand-Archive -Path $ZipPath -DestinationPath $InstallDir -Force
 Remove-Item $ZipPath
 
+# Add to user PATH if not already present
+$CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($CurrentPath -notlike "*$InstallDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$CurrentPath;$InstallDir", "User")
+    Write-Host "Added $InstallDir to your PATH."
+    Write-Host "Restart your terminal for PATH changes to take effect."
+}
+
 Write-Host ""
-Write-Host "✅ Installed: .\$Binary.exe"
+Write-Host "✅ Installed: $InstallDir\$Binary.exe"
 Write-Host ""
-Write-Host "Run it:"
-Write-Host "  .\$Binary.exe"
+Write-Host "Run it (after restarting terminal):"
+Write-Host "  $Binary"

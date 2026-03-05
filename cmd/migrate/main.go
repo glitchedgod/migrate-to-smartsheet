@@ -7,11 +7,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at build time via -ldflags "-X main.version=x.y.z"
+var version = "dev"
+
 func main() {
 	root := &cobra.Command{
-		Use:   "migrate-to-smartsheet",
-		Short: "Migrate data from project management tools into Smartsheet",
-		RunE:  runMigrate,
+		Use:     "migrate-to-smartsheet",
+		Short:   "Migrate data from project management tools into Smartsheet",
+		Version: version,
+		RunE:    runMigrate,
 	}
 
 	root.PersistentFlags().String("source", "", "Source platform (asana|monday|trello|jira|airtable|notion|wrike)")
