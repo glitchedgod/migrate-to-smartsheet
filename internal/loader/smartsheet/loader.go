@@ -127,6 +127,71 @@ func (l *Loader) CreateWorkspace(ctx context.Context, name string) (int64, strin
 	return result.Result.ID, result.Result.Permalink, nil
 }
 
+// ListSheetNames returns a map of sheet name → sheet ID for all sheets
+// visible to the token. If workspaceID is non-zero, only sheets in that
+// workspace are returned.
+func (l *Loader) ListSheetNames(ctx context.Context, workspaceID int64) (map[string]int64, error) {
+	var url string
+	if workspaceID != 0 {
+		url = fmt.Sprintf("%s/workspaces/%d/sheets", l.baseURL, workspaceID)
+	} else {
+		url = l.baseURL + "/sheets"
+	}
+
+	l.rl.Wait()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+l.token)
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("smartsheet list sheets: %s", readAPIError(resp))
+	}
+
+	var result struct {
+		Data []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	m := make(map[string]int64, len(result.Data))
+	for _, s := range result.Data {
+		m[s.Name] = s.ID
+	}
+	return m, nil
+}
+
+// DeleteSheet permanently deletes a sheet by ID.
+func (l *Loader) DeleteSheet(ctx context.Context, sheetID int64) error {
+	url := fmt.Sprintf("%s/sheets/%d", l.baseURL, sheetID)
+
+	l.rl.Wait()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+l.token)
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("smartsheet delete sheet: %s", readAPIError(resp))
+	}
+	return nil
+}
+
 func readAPIError(resp *http.Response) string {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil || len(body) == 0 {

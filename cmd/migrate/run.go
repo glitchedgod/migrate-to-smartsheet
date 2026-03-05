@@ -360,6 +360,17 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Fetch existing sheet names once so conflict resolution can look them up
+	// without an API call per project.
+	existingSheets := map[string]int64{}
+	if conflictMode == "rename" || conflictMode == "overwrite" {
+		if m, err := loader.ListSheetNames(ctx, ssWorkspaceID); err == nil {
+			existingSheets = m
+		} else {
+			fmt.Fprintf(os.Stderr, "  ⚠  Could not list existing sheets (conflict=%s will be best-effort): %v\n", conflictMode, err)
+		}
+	}
+
 	// Migrate — per-project live status
 	tracker := newStatusTracker(sheetNames)
 	fmt.Println()
@@ -395,8 +406,24 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		// Smartsheet returns HTTP 500 when two columns share the same name.
 		deduplicateProjectColumns(proj)
 
-		// Handle conflict check (skip is default — if sheet exists, we'll get an API error and log it)
-		_ = conflictMode // TODO: implement rename/overwrite in loader
+		// Conflict handling
+		switch conflictMode {
+		case "rename":
+			if _, exists := existingSheets[sheetName]; exists {
+				sheetName = resolveRename(sheetName, existingSheets)
+				proj.Name = sheetName
+				sheetNames[i] = sheetName
+			}
+		case "overwrite":
+			if existingID, exists := existingSheets[sheetName]; exists {
+				if err := loader.DeleteSheet(ctx, existingID); err != nil {
+					fmt.Fprintf(os.Stderr, "  ⚠  Could not delete existing sheet %q for overwrite: %v\n", sheetName, err)
+				} else {
+					delete(existingSheets, sheetName)
+				}
+			}
+		// "skip" (default): do nothing — CreateSheet will return an error if the sheet exists
+		}
 
 		if mlog != nil {
 			mlog.Info("migrating sheet",
@@ -433,6 +460,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 				"smartsheet_workspace_id", ssWorkspaceID,
 			)
 		}
+		// Track newly created sheet so subsequent projects in the same run
+		// can detect name collisions (relevant for rename/overwrite modes).
+		existingSheets[sheetName] = sheetID
 
 		rowIDMap, rowErr := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
 		if rowErr != nil {
@@ -944,6 +974,17 @@ func runFailedProjects(
 	}
 
 	return outcomes
+}
+
+// resolveRename appends " (2)", " (3)" … to name until a name not present in
+// existing is found, then returns it.
+func resolveRename(name string, existing map[string]int64) string {
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s (%d)", name, i)
+		if _, taken := existing[candidate]; !taken {
+			return candidate
+		}
+	}
 }
 
 func applySheetNaming(name, source, prefix, suffix, tmpl string) string {

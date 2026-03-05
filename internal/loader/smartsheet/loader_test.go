@@ -245,6 +245,67 @@ func TestBulkInsertRowsHTTPError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestListSheetNames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "/workspaces/42/sheets", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"data": []map[string]interface{}{
+				{"id": float64(101), "name": "Alpha"},
+				{"id": float64(102), "name": "Beta"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	names, err := loader.ListSheetNames(context.Background(), 42)
+	require.NoError(t, err)
+	assert.Equal(t, int64(101), names["Alpha"])
+	assert.Equal(t, int64(102), names["Beta"])
+}
+
+func TestListSheetNamesRootScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/sheets", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []interface{}{}}) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	names, err := loader.ListSheetNames(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Empty(t, names)
+}
+
+func TestDeleteSheet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "DELETE", r.Method)
+		assert.Equal(t, "/sheets/999", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"resultCode": 0, "message": "SUCCESS"}) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	err := loader.DeleteSheet(context.Background(), 999)
+	require.NoError(t, err)
+}
+
+func TestDeleteSheetError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	loader := smartsheet.New("fake-token", smartsheet.WithBaseURL(srv.URL))
+	err := loader.DeleteSheet(context.Background(), 999)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+}
+
 func TestLoaderHasRateLimiter(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
