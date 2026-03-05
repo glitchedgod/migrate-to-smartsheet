@@ -188,9 +188,7 @@ func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]ext
 		if err := e.get(ctx, path, &page); err != nil {
 			return nil, err
 		}
-		for _, p := range page.Values {
-			resp.Values = append(resp.Values, p)
-		}
+		resp.Values = append(resp.Values, page.Values...)
 		if page.IsLast || len(page.Values) == 0 {
 			break
 		}

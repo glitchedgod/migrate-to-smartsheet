@@ -85,38 +85,6 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 	return []model.Workspace{{ID: accountID, Name: accountName}}, nil
 }
 
-func (e *Extractor) resolveContactEmails(ctx context.Context, ids []string) map[string]string {
-	if len(ids) == 0 {
-		return nil
-	}
-	// Build comma-separated id list for the query param
-	joined := ""
-	for i, id := range ids {
-		if i > 0 {
-			joined += ","
-		}
-		joined += id
-	}
-	var resp struct {
-		Data []struct {
-			ID       string `json:"id"`
-			Profiles []struct {
-				Email string `json:"email"`
-			} `json:"profiles"`
-		} `json:"data"`
-	}
-	path := fmt.Sprintf("/contacts?ids=[%s]", joined)
-	if err := e.get(ctx, path, &resp); err != nil {
-		return nil
-	}
-	m := make(map[string]string, len(resp.Data))
-	for _, c := range resp.Data {
-		if len(c.Profiles) > 0 && c.Profiles[0].Email != "" {
-			m[c.ID] = c.Profiles[0].Email
-		}
-	}
-	return m
-}
 
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID string, opts extractor.Options) (*model.Project, error) {
 	// Fetch folder name

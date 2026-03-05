@@ -17,7 +17,7 @@ func readEntries(t *testing.T, path string) []miglog.Entry {
 	t.Helper()
 	f, err := os.Open(path)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var entries []miglog.Entry
 	sc := bufio.NewScanner(f)
@@ -80,6 +80,6 @@ func TestLoggerFilePath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")
 	lg, err := miglog.New(path, "notion")
 	require.NoError(t, err)
-	defer lg.Close()
+	defer func() { _ = lg.Close() }()
 	assert.Equal(t, path, lg.FilePath())
 }
