@@ -21,42 +21,19 @@ Migrate data from project management tools into Smartsheet. Single binary. Non-d
 
 ## Installation
 
-**Download a pre-built binary** (recommended):
+**macOS / Linux — one-liner installer:**
 
-**macOS (Apple Silicon)**
 ```bash
-curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_darwin_arm64.tar.gz | tar -xz
-chmod +x migrate-to-smartsheet
-./migrate-to-smartsheet
+curl -fsSL https://raw.githubusercontent.com/glitchedgod/migrate-to-smartsheet/main/install.sh | bash
 ```
 
-**macOS (Intel)**
-```bash
-curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_darwin_amd64.tar.gz | tar -xz
-chmod +x migrate-to-smartsheet
-./migrate-to-smartsheet
-```
+**Windows (PowerShell):**
 
-**Linux (amd64)**
-```bash
-curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_linux_amd64.tar.gz | tar -xz
-chmod +x migrate-to-smartsheet
-./migrate-to-smartsheet
-```
-
-**Linux (arm64)**
-```bash
-curl -L https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_linux_arm64.tar.gz | tar -xz
-chmod +x migrate-to-smartsheet
-./migrate-to-smartsheet
-```
-
-**Windows (PowerShell)**
 ```powershell
-Invoke-WebRequest -Uri https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest/download/migrate-to-smartsheet_0.3.1_windows_amd64.zip -OutFile migrate.zip
-Expand-Archive migrate.zip .
-.\migrate-to-smartsheet.exe
+irm https://raw.githubusercontent.com/glitchedgod/migrate-to-smartsheet/main/install.ps1 | iex
 ```
+
+Or download a specific platform archive directly from [Releases](https://github.com/glitchedgod/migrate-to-smartsheet/releases/latest).
 
 **Build from source** (requires Go 1.22+):
 ```bash
