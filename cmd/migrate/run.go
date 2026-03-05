@@ -573,6 +573,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		WorkspaceName:      ssWorkspaceName,
 		LogPath:            logPath,
 		StateFile:          resultStateFile,
+		Rerunner: func(failed []postmigration.ProjectOutcome) []postmigration.ProjectOutcome {
+			return runFailedProjects(ctx, failed, ext, loader, sourceStr, selectedWorkspace.ID,
+				ssWorkspaceID, ssWorkspaceName, opts, userMap, sheetPrefix, sheetSuffix, sheetTemplate,
+				includeAttachments, includeComments, conflictMode, migState, stateFile, mlog)
+		},
 	}
 	postmigration.RunMenu(result)
 
@@ -768,6 +773,177 @@ func (t *statusTracker) printAll() {
 	fmt.Println()
 	fmt.Printf("  Migration complete  ·  %d of %d sheets\n", succeeded, t.total)
 	fmt.Println(sep)
+}
+
+// runFailedProjects re-extracts and re-migrates only the projects that failed
+// in the original run. It clears those project IDs from the state file first
+// so they are treated as not yet migrated, then runs the same migration loop.
+// Returns updated ProjectOutcomes (one per failed project).
+func runFailedProjects(
+	ctx context.Context,
+	failed []postmigration.ProjectOutcome,
+	ext extractor.Extractor,
+	loader *ssloader.Loader,
+	sourceStr, workspaceID string,
+	ssWorkspaceID int64,
+	ssWorkspaceName string,
+	opts extractor.Options,
+	userMap *transformer.UserMap,
+	sheetPrefix, sheetSuffix, sheetTemplate string,
+	includeAttachments, includeComments bool,
+	conflictMode string,
+	migState *state.MigrationState,
+	stateFile string,
+	mlog *miglog.Logger,
+) []postmigration.ProjectOutcome {
+	// Clear failed IDs from state so they re-run.
+	for _, f := range failed {
+		migState.ClearCompleted(f.SourceID)
+	}
+	_ = state.Save(stateFile, migState)
+
+	sheetNames := make([]string, len(failed))
+	projects := make([]model.Project, 0, len(failed))
+
+	for i, f := range failed {
+		extracted, err := ext.ExtractProject(ctx, workspaceID, f.SourceID, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠  Re-extract failed for %s: %v\n", f.Name, err)
+			// Return a failed outcome immediately — no project to migrate.
+			failed[i].Err = err
+			sheetNames[i] = f.SheetName
+			continue
+		}
+		if len(opts.ExcludeFields) > 0 {
+			extracted = applyExcludeFields(extracted, opts.ExcludeFields)
+		}
+		sheetNames[i] = applySheetNaming(extracted.Name, sourceStr, sheetPrefix, sheetSuffix, sheetTemplate)
+		projects = append(projects, *extracted)
+	}
+
+	tracker := newStatusTracker(sheetNames)
+	fmt.Println()
+	fmt.Println("  ─────────────────────────────────────────────────────────────────")
+
+	outcomes := make([]postmigration.ProjectOutcome, len(failed))
+	// Pre-fill with the existing failed outcomes so extraction failures carry through.
+	copy(outcomes, failed)
+
+	projIdx := 0
+	for i := range failed {
+		if projIdx >= len(projects) || projects[projIdx].ID != failed[i].SourceID {
+			// This project failed to extract — skip the loop body.
+			tracker.fail(i, fmt.Sprintf("extract failed: %v", failed[i].Err))
+			continue
+		}
+		proj := &projects[projIdx]
+		projIdx++
+		tracker.start(i)
+
+		colTypeByName := make(map[string]model.ColumnType, len(proj.Columns))
+		for _, col := range proj.Columns {
+			colTypeByName[col.Name] = col.Type
+		}
+		for ri := range proj.Rows {
+			for ci := range proj.Rows[ri].Cells {
+				cell := &proj.Rows[ri].Cells[ci]
+				cell.Value = transformer.TransformCellValue(cell.Value, colTypeByName[cell.ColumnName], userMap)
+			}
+		}
+
+		sheetName := sheetNames[i]
+		proj.Name = sheetName
+		deduplicateProjectColumns(proj)
+		_ = conflictMode
+
+		sheetID, colMap, contactColIDs, err := loader.CreateSheet(ctx, proj, ssWorkspaceID)
+		if err != nil {
+			tracker.fail(i, fmt.Sprintf("sheet create failed: %v", err))
+			outcomes[i] = postmigration.ProjectOutcome{SourceID: proj.ID, Name: proj.Name, SheetName: sheetName, Err: err}
+			continue
+		}
+
+		rowIDMap, rowErr := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
+		if rowErr != nil {
+			tracker.fail(i, fmt.Sprintf("row insert failed: %v", rowErr))
+			outcomes[i] = postmigration.ProjectOutcome{SourceID: proj.ID, Name: proj.Name, SheetName: sheetName, SheetID: sheetID, Err: rowErr}
+			continue
+		}
+
+		attachCount := 0
+		if includeAttachments {
+			for _, row := range proj.Rows {
+				ssRowID, ok := rowIDMap[row.ID]
+				if !ok {
+					continue
+				}
+				for _, att := range row.Attachments {
+					if att.SizeBytes > 25*1024*1024 {
+						continue
+					}
+					if err := downloadAndUpload(ctx, loader, sheetID, ssRowID, att); err == nil {
+						attachCount++
+					}
+				}
+			}
+		}
+
+		commentCount := 0
+		if includeComments {
+			for _, row := range proj.Rows {
+				ssRowID, ok := rowIDMap[row.ID]
+				if !ok {
+					continue
+				}
+				for _, comment := range row.Comments {
+					text := fmt.Sprintf("[%s] %s", comment.AuthorName, comment.Body)
+					if err := loader.AddComment(ctx, sheetID, ssRowID, text); err == nil {
+						commentCount++
+					}
+				}
+			}
+		}
+
+		noun := platformNoun(sourceStr)
+		msg := fmt.Sprintf("%d %s", len(proj.Rows), noun)
+		if attachCount > 0 {
+			msg += fmt.Sprintf(" · %d attachments", attachCount)
+		}
+		tracker.complete(i, msg)
+
+		migState.MarkCompleted(proj.ID)
+		_ = state.Save(stateFile, migState)
+
+		outcomes[i] = postmigration.ProjectOutcome{
+			SourceID:     proj.ID,
+			Name:         proj.Name,
+			SheetName:    sheetName,
+			SheetID:      sheetID,
+			RowCount:     len(proj.Rows),
+			AttachCount:  attachCount,
+			CommentCount: commentCount,
+		}
+
+		if mlog != nil {
+			mlog.SheetComplete(sheetName, len(proj.Rows), attachCount, commentCount)
+		}
+	}
+
+	tracker.printAll()
+
+	// If everything succeeded now, clean up state file.
+	allOK := true
+	for _, o := range outcomes {
+		if o.Err != nil {
+			allOK = false
+			break
+		}
+	}
+	if allOK {
+		_ = os.Remove(stateFile)
+	}
+
+	return outcomes
 }
 
 func applySheetNaming(name, source, prefix, suffix, tmpl string) string {

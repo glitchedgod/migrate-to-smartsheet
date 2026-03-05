@@ -29,6 +29,10 @@ type MigrationResult struct {
 	WorkspaceName      string
 	LogPath            string
 	StateFile          string // path to state file; empty if all succeeded
+	// Rerunner is called when the user picks "Re-run failed sheets". It
+	// receives the failed outcomes and returns updated outcomes after the
+	// retry. If nil, the option is disabled.
+	Rerunner func(failed []ProjectOutcome) []ProjectOutcome
 }
 
 // hasErrors reports whether any outcome carried an error.
@@ -101,13 +105,53 @@ func RunMenu(result MigrationResult) {
 			}
 
 		case optRerun:
-			fmt.Println("  Re-run not yet implemented.")
-			return
+			if result.Rerunner == nil {
+				fmt.Println("  Re-run is not available.")
+				continue
+			}
+			failed := failedOutcomes(result.Outcomes)
+			fmt.Printf("\n  Re-running %d failed sheet(s)...\n\n", len(failed))
+			retried := result.Rerunner(failed)
+			// Merge retried outcomes back: replace each matching SourceID.
+			result.Outcomes = mergeOutcomes(result.Outcomes, retried)
+			withErrors = hasErrors(result.Outcomes)
+			if !withErrors {
+				fmt.Println("\n  All sheets migrated successfully.")
+			}
 
 		case optExit:
 			return
 		}
 	}
+}
+
+// failedOutcomes returns only the outcomes that carried an error.
+func failedOutcomes(outcomes []ProjectOutcome) []ProjectOutcome {
+	var out []ProjectOutcome
+	for _, o := range outcomes {
+		if o.Err != nil {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// mergeOutcomes replaces entries in base with the corresponding entry from
+// updates (matched by SourceID), preserving the original order.
+func mergeOutcomes(base, updates []ProjectOutcome) []ProjectOutcome {
+	updateMap := make(map[string]ProjectOutcome, len(updates))
+	for _, u := range updates {
+		updateMap[u.SourceID] = u
+	}
+	result := make([]ProjectOutcome, len(base))
+	for i, o := range base {
+		if u, ok := updateMap[o.SourceID]; ok {
+			result[i] = u
+		} else {
+			result[i] = o
+		}
+	}
+	return result
 }
 
 // Menu option labels — kept as constants so the switch stays in sync with the
@@ -133,7 +177,9 @@ func buildOptions(result MigrationResult, withErrors bool) []string {
 	}
 	if withErrors {
 		opts = append(opts, optReportErrors)
-		opts = append(opts, optRerun)
+		if result.Rerunner != nil {
+			opts = append(opts, optRerun)
+		}
 	}
 	opts = append(opts, optExit)
 

@@ -35,6 +35,18 @@ func (s *MigrationState) MarkCompleted(sourceProjectID string) {
 	s.CompletedSheets = append(s.CompletedSheets, sourceProjectID)
 }
 
+// ClearCompleted removes a single project ID from the completed list, allowing
+// it to be re-migrated (used by the re-run failed sheets feature).
+func (s *MigrationState) ClearCompleted(sourceProjectID string) {
+	filtered := s.CompletedSheets[:0]
+	for _, id := range s.CompletedSheets {
+		if id != sourceProjectID {
+			filtered = append(filtered, id)
+		}
+	}
+	s.CompletedSheets = filtered
+}
+
 // UpdatePartialSheet records progress within a currently-migrating sheet.
 func (s *MigrationState) UpdatePartialSheet(sourceID string, smartsheetID int64, lastRow int) {
 	s.PartialSheet = &PartialSheet{
