@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/ratelimit"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
@@ -85,6 +86,44 @@ func normalizeCellValue(v interface{}) interface{} {
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+// CreateWorkspace creates a new Smartsheet workspace and returns its ID.
+// If a workspace with the same name already exists it returns the existing ID.
+func (l *Loader) CreateWorkspace(ctx context.Context, name string) (int64, error) {
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return 0, err
+	}
+	l.rl.Wait()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.baseURL+"/workspaces", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+l.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("smartsheet create workspace: %s", readAPIError(resp))
+	}
+
+	var result struct {
+		ResultCode int `json:"resultCode"`
+		Result     struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	return result.Result.ID, nil
 }
 
 func readAPIError(resp *http.Response) string {
@@ -404,17 +443,34 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 	}
 
 	url := fmt.Sprintf("%s/sheets/%d/rows", l.baseURL, sheetID)
-	l.rl.Wait()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+l.token)
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, err
+	// Retry once on 404 — Smartsheet occasionally takes a moment to propagate a
+	// newly-created sheet (especially when created inside a workspace).
+	var resp *http.Response
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			// Brief pause before retry
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+		l.rl.Wait()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+l.token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = l.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			break
+		}
+		_ = resp.Body.Close()
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {

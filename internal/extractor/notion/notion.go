@@ -108,6 +108,26 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 }
 
 func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
+	// In Notion, a "workspace" in this tool's model is itself a database.
+	// When a specific workspace (database) is selected, it IS the only project to migrate.
+	// This avoids the previous behaviour of ignoring the selection and returning all databases.
+	if workspaceID != "" {
+		// Fetch the database metadata to get its title.
+		var dbMeta struct {
+			Title []struct {
+				PlainText string `json:"plain_text"`
+			} `json:"title"`
+		}
+		name := workspaceID
+		if err := e.get(ctx, fmt.Sprintf("/databases/%s", workspaceID), &dbMeta); err == nil {
+			if len(dbMeta.Title) > 0 && dbMeta.Title[0].PlainText != "" {
+				name = dbMeta.Title[0].PlainText
+			}
+		}
+		return []extractor.ProjectRef{{ID: workspaceID, Name: name}}, nil
+	}
+
+	// No workspace selected: list all accessible databases.
 	var refs []extractor.ProjectRef
 	var cursor *string
 	for {

@@ -58,31 +58,26 @@ func (e *Extractor) get(ctx context.Context, path string, out interface{}) error
 }
 
 func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, error) {
+	// Wrike's Space concept is the closest equivalent to a workspace —
+	// each Space groups a set of related projects/folders.
 	var resp struct {
 		Data []struct {
-			AccountID string `json:"accountId"`
-			Profiles  []struct {
-				AccountID string `json:"accountId"`
-				Name      string `json:"name"`
-			} `json:"profiles"`
+			ID    string `json:"id"`
+			Title string `json:"title"`
 		} `json:"data"`
 	}
-	if err := e.get(ctx, "/contacts?me=true", &resp); err != nil {
-		return nil, err
+	if err := e.get(ctx, "/spaces", &resp); err != nil {
+		// Fall back to single account-level workspace if spaces endpoint fails.
+		return []model.Workspace{{ID: "account", Name: "Wrike Account"}}, nil
 	}
-	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("wrike: could not determine account from contacts")
+	ws := make([]model.Workspace, 0, len(resp.Data))
+	for _, s := range resp.Data {
+		ws = append(ws, model.Workspace{ID: s.ID, Name: s.Title})
 	}
-	contact := resp.Data[0]
-	accountID := contact.AccountID
-	accountName := "Wrike Account"
-	for _, p := range contact.Profiles {
-		if p.AccountID == accountID {
-			accountName = p.Name
-			break
-		}
+	if len(ws) == 0 {
+		return []model.Workspace{{ID: "account", Name: "Wrike Account"}}, nil
 	}
-	return []model.Workspace{{ID: accountID, Name: accountName}}, nil
+	return ws, nil
 }
 
 
@@ -146,7 +141,8 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, folderID st
 	return proj, nil
 }
 
-// ListProjects lists all project-folders in the given account/workspace.
+// ListProjects lists all project-folders within the given Wrike space.
+// Falls back to listing all folders if workspaceID is "account" or empty.
 func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
 	var resp struct {
 		Data []struct {
@@ -155,7 +151,14 @@ func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]ext
 			Project map[string]interface{} `json:"project"`
 		} `json:"data"`
 	}
-	if err := e.get(ctx, "/folders", &resp); err != nil {
+
+	path := "/folders"
+	if workspaceID != "" && workspaceID != "account" {
+		// Scope to the selected space's folders.
+		path = fmt.Sprintf("/spaces/%s/folders", workspaceID)
+	}
+
+	if err := e.get(ctx, path, &resp); err != nil {
 		return nil, err
 	}
 	var refs []extractor.ProjectRef

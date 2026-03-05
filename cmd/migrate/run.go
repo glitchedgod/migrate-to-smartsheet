@@ -73,10 +73,28 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	// Interactive prompts for missing required values — skip when --yes or non-TTY
 	if sourceStr == "" && !yes {
+		// Platform options with icons for a delightful experience
+		platformOptions := []string{
+			"🅰️   asana     — Asana",
+			"📅  monday    — Monday.com",
+			"📋  trello    — Trello",
+			"🔷  jira      — Jira Cloud",
+			"🗂️   airtable  — Airtable",
+			"📓  notion    — Notion",
+			"✍️   wrike     — Wrike",
+		}
+		var platformChoice string
 		survey.AskOne(&survey.Select{ //nolint:errcheck
-			Message: "Select source platform:",
-			Options: []string{"asana", "monday", "trello", "jira", "airtable", "notion", "wrike"},
-		}, &sourceStr)
+			Message: "Which platform are you migrating from?",
+			Options: platformOptions,
+		}, &platformChoice)
+		// Extract the platform key from the chosen option
+		for _, key := range []string{"asana", "monday", "trello", "jira", "airtable", "notion", "wrike"} {
+			if strings.Contains(platformChoice, key) {
+				sourceStr = key
+				break
+			}
+		}
 	}
 	if sourceToken == "" && !yes {
 		creds, err := wizard.ShowAndPrompt(sourceStr)
@@ -145,12 +163,12 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	} else {
 		wsNames := make([]string, len(workspaces))
 		for i, ws := range workspaces {
-			wsNames[i] = ws.Name
+			wsNames[i] = "📁  " + ws.Name
 		}
 		var wsChoice string
 		survey.AskOne(&survey.Select{Message: "Select workspace:", Options: wsNames}, &wsChoice) //nolint:errcheck
-		for _, ws := range workspaces {
-			if ws.Name == wsChoice {
+		for i, ws := range workspaces {
+			if wsNames[i] == wsChoice {
 				selectedWorkspace = ws
 				break
 			}
@@ -179,18 +197,24 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	} else if yes {
 		selectedProjects = projectRefs
 	} else {
+		projIcon := platformProjectIcon(sourceStr)
 		projNames := make([]string, len(projectRefs))
 		for i, p := range projectRefs {
-			projNames[i] = p.Name
+			projNames[i] = projIcon + "  " + p.Name
 		}
 		var chosen []string
-		survey.AskOne(&survey.MultiSelect{Message: "Select projects to migrate:", Options: projNames}, &chosen) //nolint:errcheck
-		nameToRef := make(map[string]extractor.ProjectRef)
-		for _, p := range projectRefs {
-			nameToRef[p.Name] = p
+		survey.AskOne(&survey.MultiSelect{ //nolint:errcheck
+			Message: "Select projects to migrate (space to select, enter to confirm):",
+			Options: projNames,
+		}, &chosen)
+		chosenSet := make(map[string]bool, len(chosen))
+		for _, c := range chosen {
+			chosenSet[c] = true
 		}
-		for _, name := range chosen {
-			selectedProjects = append(selectedProjects, nameToRef[name])
+		for i, p := range projectRefs {
+			if chosenSet[projNames[i]] {
+				selectedProjects = append(selectedProjects, p)
+			}
 		}
 	}
 
@@ -211,6 +235,32 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--smartsheet-token is required")
 	}
 	loader := ssloader.New(ssToken)
+
+	// Create (or reuse) a Smartsheet workspace mirroring the source workspace.
+	// Platforms where the "workspace" is a synthetic placeholder (Jira = instance URL,
+	// Wrike = account ID) get a cleaned-up name; the others get the real workspace name.
+	ssWorkspaceID := int64(0)
+	ssWorkspaceName := selectedWorkspace.Name
+	// For Jira, use a shorter display name derived from the instance URL
+	if sourceStr == "jira" {
+		ssWorkspaceName = strings.TrimPrefix(strings.TrimPrefix(selectedWorkspace.Name, "https://"), "http://")
+	}
+	// For Airtable, clarify that this is a Base (matches user mental model)
+	if sourceStr == "airtable" {
+		ssWorkspaceName = selectedWorkspace.Name + " (Airtable)"
+	}
+	if ssWorkspaceName != "" {
+		wsID, wsErr := loader.CreateWorkspace(ctx, ssWorkspaceName)
+		if wsErr != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠  Could not create Smartsheet workspace %q: %v — sheets will be created at root\n", ssWorkspaceName, wsErr)
+		} else {
+			ssWorkspaceID = wsID
+			fmt.Printf("  📁 Smartsheet workspace: %s\n", ssWorkspaceName)
+			if mlog != nil {
+				mlog.Info("smartsheet workspace created", "workspace", ssWorkspaceName, "workspace_id", wsID)
+			}
+		}
+	}
 
 	// Resume state
 	stateFile := fmt.Sprintf(".migrate-state-%s-%d.json", sourceStr, time.Now().Unix())
@@ -344,10 +394,15 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		_ = conflictMode // TODO: implement rename/overwrite in loader
 
 		if mlog != nil {
-			mlog.SheetStart(sheetName, len(proj.Columns), len(proj.Rows))
+			mlog.Info("migrating sheet",
+				"sheet", sheetName,
+				"rows", len(proj.Rows),
+				"columns", len(proj.Columns),
+				"smartsheet_workspace", ssWorkspaceName,
+			)
 		}
 
-		sheetID, colMap, contactColIDs, err := loader.CreateSheet(ctx, proj, 0)
+		sheetID, colMap, contactColIDs, err := loader.CreateSheet(ctx, proj, ssWorkspaceID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", sheetName, err)
 			if mlog != nil {
@@ -359,11 +414,23 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if mlog != nil {
+			mlog.Info("sheet created",
+				"sheet", sheetName,
+				"sheet_id", sheetID,
+				"smartsheet_workspace_id", ssWorkspaceID,
+			)
+		}
+
 		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", sheetName, err)
 			if mlog != nil {
-				mlog.SheetFailed(sheetName, err)
+				mlog.Error("row insert failed",
+					"sheet", sheetName,
+					"sheet_id", sheetID,
+					"error", err.Error(),
+				)
 			}
 			allSucceeded = false
 			errCount++
@@ -608,6 +675,28 @@ func buildExtractor(source, token string, cmd *cobra.Command) (extractor.Extract
 		return wrikeext.New(token), nil
 	default:
 		return nil, fmt.Errorf("unsupported source: %q", source)
+	}
+}
+
+// platformProjectIcon returns a small emoji representing a project on the given platform.
+func platformProjectIcon(platform string) string {
+	switch strings.ToLower(platform) {
+	case "asana":
+		return "🅰️"
+	case "monday":
+		return "📅"
+	case "trello":
+		return "📋"
+	case "jira":
+		return "🔷"
+	case "airtable":
+		return "🗂️"
+	case "notion":
+		return "📓"
+	case "wrike":
+		return "✍️"
+	default:
+		return "📌"
 	}
 }
 

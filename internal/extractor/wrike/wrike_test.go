@@ -16,17 +16,12 @@ import (
 
 func TestWrikeListWorkspaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/contacts", r.URL.Path)
-		assert.Equal(t, "true", r.URL.Query().Get("me"))
+		assert.Equal(t, "/spaces", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
-				{
-					"accountId": "acc_1",
-					"profiles": []map[string]interface{}{
-						{"accountId": "acc_1", "name": "My Wrike Account"},
-					},
-				},
+				{"id": "SPACE_1", "title": "Engineering"},
+				{"id": "SPACE_2", "title": "Marketing"},
 			},
 		})
 	}))
@@ -35,9 +30,11 @@ func TestWrikeListWorkspaces(t *testing.T) {
 	e := wrikeext.New("fake-token", wrikeext.WithBaseURL(srv.URL))
 	ws, err := e.ListWorkspaces(context.Background())
 	require.NoError(t, err)
-	assert.Len(t, ws, 1)
-	assert.Equal(t, "acc_1", ws[0].ID)
-	assert.Equal(t, "My Wrike Account", ws[0].Name)
+	assert.Len(t, ws, 2)
+	assert.Equal(t, "SPACE_1", ws[0].ID)
+	assert.Equal(t, "Engineering", ws[0].Name)
+	assert.Equal(t, "SPACE_2", ws[1].ID)
+	assert.Equal(t, "Marketing", ws[1].Name)
 }
 
 func TestWrikeExtractProject(t *testing.T) {
@@ -67,6 +64,8 @@ func TestWrikeExtractProject(t *testing.T) {
 
 func TestWrikeListProjects(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Expect space-scoped path when a real space ID is provided
+		assert.Equal(t, "/spaces/SPACE_1/folders", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 			"data": []map[string]interface{}{
@@ -78,7 +77,7 @@ func TestWrikeListProjects(t *testing.T) {
 	defer srv.Close()
 
 	e := wrikeext.New("fake-token", wrikeext.WithBaseURL(srv.URL))
-	projects, err := e.ListProjects(context.Background(), "acc_1")
+	projects, err := e.ListProjects(context.Background(), "SPACE_1")
 	require.NoError(t, err)
 	assert.Len(t, projects, 1, "only folders with 'project' field should be returned")
 	assert.Equal(t, "FOLDER_1", projects[0].ID)
