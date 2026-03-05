@@ -158,7 +158,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		if selectedWorkspace.ID == "" {
 			return fmt.Errorf("workspace %q not found", workspaceFlag)
 		}
-	} else if len(workspaces) == 1 {
+	} else if len(workspaces) == 1 || yes {
+		// With --yes and multiple workspaces, default to the first one.
+		// Users can specify --workspace to target a specific one.
 		selectedWorkspace = workspaces[0]
 	} else {
 		wsNames := make([]string, len(workspaces))
