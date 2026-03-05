@@ -64,15 +64,21 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Interactive prompts for missing required values
-	if sourceStr == "" {
+	// Interactive prompts for missing required values — skip when --yes or non-TTY
+	if sourceStr == "" && !yes {
 		survey.AskOne(&survey.Select{ //nolint:errcheck
 			Message: "Select source platform:",
 			Options: []string{"asana", "monday", "trello", "jira", "airtable", "notion", "wrike"},
 		}, &sourceStr)
 	}
-	if sourceToken == "" {
+	if sourceToken == "" && !yes {
 		survey.AskOne(&survey.Password{Message: fmt.Sprintf("[%s] API token:", sourceStr)}, &sourceToken) //nolint:errcheck
+	}
+	if sourceStr == "" {
+		return fmt.Errorf("--source is required")
+	}
+	if sourceToken == "" {
+		return fmt.Errorf("--source-token is required")
 	}
 
 	ext, err := buildExtractor(sourceStr, sourceToken, cmd)
@@ -161,8 +167,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Smartsheet setup
-	if ssToken == "" {
+	if ssToken == "" && !yes {
 		survey.AskOne(&survey.Password{Message: "Smartsheet API token:"}, &ssToken) //nolint:errcheck
+	}
+	if ssToken == "" {
+		return fmt.Errorf("--smartsheet-token is required")
 	}
 	loader := ssloader.New(ssToken)
 
@@ -288,6 +297,10 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		sheetName := applySheetNaming(proj.Name, sourceStr, sheetPrefix, sheetSuffix, sheetTemplate)
 		proj.Name = sheetName
 
+		// Deduplicate column names before creating the sheet.
+		// Smartsheet returns HTTP 500 when two columns share the same name.
+		deduplicateProjectColumns(proj)
+
 		// Handle conflict check (skip is default — if sheet exists, we'll get an API error and log it)
 		_ = conflictMode // TODO: implement rename/overwrite in loader
 
@@ -389,12 +402,88 @@ func applyExcludeFields(proj *model.Project, exclude []string) *model.Project {
 	return proj
 }
 
+// deduplicateProjectColumns renames duplicate column names in-place so that
+// Smartsheet (which rejects sheets with two columns sharing the same name)
+// does not return a 500 error. Both proj.Columns and every cell in proj.Rows
+// are updated so that colMap lookups in BulkInsertRows remain consistent.
+//
+// Strategy: scan columns left-to-right. The first occurrence of a name keeps
+// it. Subsequent occurrences get a "(2)", "(3)" … suffix. A mapping from
+// each column index to its final name is used to rewrite cell ColumnName
+// fields by matching cells to columns in order of occurrence.
+//
+// Example: two "Status" columns become "Status" and "Status (2)".
+func deduplicateProjectColumns(proj *model.Project) {
+	n := len(proj.Columns)
+	if n == 0 {
+		return
+	}
+
+	// Save original names before any mutation.
+	origNames := make([]string, n)
+	for i, c := range proj.Columns {
+		origNames[i] = c.Name
+	}
+
+	// Assign final names; track all assigned names to avoid new collisions.
+	assigned := make(map[string]bool, n)
+	finalNames := make([]string, n)
+	seenCount := make(map[string]int, n)
+
+	for i, orig := range origNames {
+		seenCount[orig]++
+		if seenCount[orig] == 1 {
+			finalNames[i] = orig
+			assigned[orig] = true
+			continue
+		}
+		counter := seenCount[orig]
+		candidate := fmt.Sprintf("%s (%d)", orig, counter)
+		for assigned[candidate] {
+			counter++
+			candidate = fmt.Sprintf("%s (%d)", orig, counter)
+		}
+		finalNames[i] = candidate
+		assigned[candidate] = true
+		proj.Columns[i].Name = candidate
+	}
+
+	// For each row, rewrite cells whose ColumnName is a duplicated original
+	// name. We match cells to column occurrences in column-index order: the
+	// first cell with name X goes to column occurrence 1 (keeps name X), the
+	// second cell with name X goes to occurrence 2 (gets renamed), etc.
+	// Build a lookup: origName → ordered list of final names.
+	occurrencesByOrig := make(map[string][]string, n)
+	for i, orig := range origNames {
+		occurrencesByOrig[orig] = append(occurrencesByOrig[orig], finalNames[i])
+	}
+
+	for ri := range proj.Rows {
+		// Per-row counter: how many cells with each original name we have seen.
+		rowOccurrence := make(map[string]int)
+		for ci := range proj.Rows[ri].Cells {
+			name := proj.Rows[ri].Cells[ci].ColumnName
+			finals, isDup := occurrencesByOrig[name]
+			if !isDup || len(finals) <= 1 {
+				continue // unique name — no rename needed
+			}
+			idx := rowOccurrence[name]
+			rowOccurrence[name]++
+			if idx < len(finals) {
+				proj.Rows[ri].Cells[ci].ColumnName = finals[idx]
+			}
+		}
+	}
+}
+
+var attachmentHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
 func downloadAndUpload(ctx context.Context, loader *ssloader.Loader, sheetID, rowID int64, att model.Attachment) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, att.URL, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := attachmentHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

@@ -10,8 +10,14 @@ type Limiter struct {
 	l *rate.Limiter
 }
 
-func (l *Limiter) Wait() {
-	l.l.Wait(context.Background()) //nolint:errcheck
+// Wait blocks until a token is available or ctx is cancelled.
+// Callers should pass the request context so cancellation propagates.
+func (l *Limiter) Wait(ctx ...context.Context) {
+	c := context.Background()
+	if len(ctx) > 0 && ctx[0] != nil {
+		c = ctx[0]
+	}
+	l.l.Wait(c) //nolint:errcheck
 }
 
 func ForPlatform(platform string) *Limiter {

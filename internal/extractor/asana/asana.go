@@ -75,18 +75,34 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 }
 
 func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]extractor.ProjectRef, error) {
-	var resp struct {
-		Data []struct {
-			GID  string `json:"gid"`
-			Name string `json:"name"`
-		} `json:"data"`
+	var all []struct {
+		GID  string `json:"gid"`
+		Name string `json:"name"`
 	}
 	path := fmt.Sprintf("/workspaces/%s/projects?opt_fields=gid,name&limit=100", workspaceID)
-	if err := e.get(ctx, path, &resp); err != nil {
-		return nil, err
+	for path != "" {
+		var resp struct {
+			Data []struct {
+				GID  string `json:"gid"`
+				Name string `json:"name"`
+			} `json:"data"`
+			NextPage *struct {
+				Offset string `json:"offset"`
+				Path   string `json:"path"`
+			} `json:"next_page"`
+		}
+		if err := e.get(ctx, path, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Data...)
+		if resp.NextPage != nil {
+			path = resp.NextPage.Path
+		} else {
+			path = ""
+		}
 	}
-	refs := make([]extractor.ProjectRef, len(resp.Data))
-	for i, p := range resp.Data {
+	refs := make([]extractor.ProjectRef, len(all))
+	for i, p := range all {
 		refs[i] = extractor.ProjectRef{ID: p.GID, Name: p.Name}
 	}
 	return refs, nil
@@ -124,15 +140,32 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		}
 	}
 
-	// Fetch tasks
-	var resp struct{ Data []asanaTask `json:"data"` }
-	path := fmt.Sprintf("/projects/%s/tasks?opt_fields=gid,name,notes,completed,due_on,start_on,created_at,modified_at,assignee.email,tags.name,parent.gid&limit=100", projectID)
+	// Fetch tasks with pagination
+	taskFields := "gid,name,notes,completed,due_on,start_on,created_at,modified_at,assignee.email,tags.name,parent.gid"
+	firstPath := fmt.Sprintf("/projects/%s/tasks?opt_fields=%s&limit=100", projectID, taskFields)
 	if !opts.CreatedAfter.IsZero() {
-		path += fmt.Sprintf("&created_since=%s", opts.CreatedAfter.Format(time.RFC3339))
+		firstPath += fmt.Sprintf("&created_since=%s", opts.CreatedAfter.Format(time.RFC3339))
 	}
-	if err := e.get(ctx, path, &resp); err != nil {
-		return nil, err
+	var allTasks []asanaTask
+	for p := firstPath; p != ""; {
+		var resp struct {
+			Data []asanaTask `json:"data"`
+			NextPage *struct {
+				Offset string `json:"offset"`
+				Path   string `json:"path"`
+			} `json:"next_page"`
+		}
+		if err := e.get(ctx, p, &resp); err != nil {
+			return nil, err
+		}
+		allTasks = append(allTasks, resp.Data...)
+		if resp.NextPage != nil {
+			p = resp.NextPage.Path
+		} else {
+			p = ""
+		}
 	}
+	resp := struct{ Data []asanaTask }{Data: allTasks}
 
 	columns := []model.ColumnDef{
 		{Name: "Name", Type: model.TypeText},
@@ -143,7 +176,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		{Name: "Created At", Type: model.TypeDateTime},
 		{Name: "Modified At", Type: model.TypeDateTime},
 		{Name: "Assignee", Type: model.TypeContact},
-		{Name: "Tags", Type: model.TypeMultiSelect},
+		{Name: "Tags", Type: model.TypeText},
 	}
 
 	rows := make([]model.Row, 0, len(resp.Data))

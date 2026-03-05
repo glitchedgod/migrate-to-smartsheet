@@ -40,6 +40,25 @@ func New(token string, opts ...Option) *Extractor {
 	return e
 }
 
+func (e *Extractor) get(ctx context.Context, path string, out interface{}) error {
+	e.rl.Wait()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+e.token)
+	req.Header.Set("Notion-Version", notionVersion)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("notion GET %s: %s", path, resp.Status)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func (e *Extractor) post(ctx context.Context, path string, body interface{}, out interface{}) error {
 	e.rl.Wait()
 	b, err := json.Marshal(body)
@@ -127,7 +146,46 @@ func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]ext
 	return refs, nil
 }
 
+func notionPropTypeToCanonical(propType string) model.ColumnType {
+	switch propType {
+	case "date", "created_time", "last_edited_time":
+		return model.TypeDate
+	case "checkbox":
+		return model.TypeCheckbox
+	case "select", "status":
+		return model.TypeSingleSelect
+	case "multi_select":
+		return model.TypeMultiSelect
+	case "people", "created_by", "last_edited_by":
+		return model.TypeMultiContact
+	case "number":
+		return model.TypeNumber
+	default:
+		return model.TypeText
+	}
+}
+
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, databaseID string, opts extractor.Options) (*model.Project, error) {
+	// Fetch database metadata to get the title and typed property schema.
+	dbName := databaseID
+	propTypes := map[string]string{} // propName → notion type string
+	var dbMeta struct {
+		Title []struct {
+			PlainText string `json:"plain_text"`
+		} `json:"title"`
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+	}
+	if err := e.get(ctx, fmt.Sprintf("/databases/%s", databaseID), &dbMeta); err == nil {
+		if len(dbMeta.Title) > 0 && dbMeta.Title[0].PlainText != "" {
+			dbName = dbMeta.Title[0].PlainText
+		}
+		for name, prop := range dbMeta.Properties {
+			propTypes[name] = prop.Type
+		}
+	}
+
 	var allPages []map[string]interface{}
 	var cursor *string
 
@@ -151,6 +209,8 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, databaseID 
 		cursor = resp.NextCursor
 	}
 
+	// Build columns from schema if available, else infer from pages.
+	// The title property must be first (it becomes the Smartsheet primary column).
 	colSet := map[string]bool{}
 	for _, p := range allPages {
 		if props, ok := p["properties"].(map[string]interface{}); ok {
@@ -159,9 +219,28 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, databaseID 
 			}
 		}
 	}
+	// Find the title property name so we can put it first.
+	titleProp := ""
+	for name, t := range propTypes {
+		if t == "title" {
+			titleProp = name
+			break
+		}
+	}
 	columns := make([]model.ColumnDef, 0, len(colSet))
+	// Add title column first.
+	if titleProp != "" && colSet[titleProp] {
+		columns = append(columns, model.ColumnDef{Name: titleProp, Type: model.TypeText})
+	}
 	for name := range colSet {
-		columns = append(columns, model.ColumnDef{Name: name, Type: model.TypeText})
+		if name == titleProp {
+			continue
+		}
+		colType := model.TypeText
+		if t, ok := propTypes[name]; ok {
+			colType = notionPropTypeToCanonical(t)
+		}
+		columns = append(columns, model.ColumnDef{Name: name, Type: colType})
 	}
 
 	rows := make([]model.Row, 0, len(allPages))
@@ -181,7 +260,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, databaseID 
 		rows = append(rows, model.Row{ID: id, Cells: cells})
 	}
 
-	return &model.Project{ID: databaseID, Name: databaseID, Columns: columns, Rows: rows}, nil
+	return &model.Project{ID: databaseID, Name: dbName, Columns: columns, Rows: rows}, nil
 }
 
 func extractNotionPropValue(prop interface{}) interface{} {

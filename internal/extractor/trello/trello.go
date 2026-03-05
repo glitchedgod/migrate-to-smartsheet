@@ -116,8 +116,8 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 		listNames = append(listNames, l.Name)
 	}
 
-	// Fetch cards
-	var cards []struct {
+	// Fetch cards with pagination (Trello max 1000 per request; paginate via `before`)
+	type trelloCard struct {
 		ID     string  `json:"id"`
 		Name   string  `json:"name"`
 		Desc   string  `json:"desc"`
@@ -129,8 +129,22 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectID s
 			Color string `json:"color"`
 		} `json:"labels"`
 	}
-	if err := e.get(ctx, fmt.Sprintf("/boards/%s/cards?limit=1000&fields=id,name,desc,closed,due,idList,labels", projectID), &cards); err != nil {
-		return nil, err
+	var cards []trelloCard
+	before := ""
+	for {
+		path := fmt.Sprintf("/boards/%s/cards?limit=1000&fields=id,name,desc,closed,due,idList,labels", projectID)
+		if before != "" {
+			path += "&before=" + before
+		}
+		var page []trelloCard
+		if err := e.get(ctx, path, &page); err != nil {
+			return nil, err
+		}
+		cards = append(cards, page...)
+		if len(page) < 1000 {
+			break
+		}
+		before = page[len(page)-1].ID
 	}
 
 	columns := []model.ColumnDef{

@@ -6,5 +6,5 @@ coverage.out
 .vscode/
 *.swp
 .playwright-mcp/
-migrate
+/migrate
 .env

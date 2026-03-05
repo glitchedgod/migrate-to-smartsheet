@@ -170,8 +170,13 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, boardID str
 		cursor = pageData.NextItemsPage.Cursor
 	}
 
-	columns := make([]model.ColumnDef, 0, len(board.Columns))
+	// Monday.com item name is a top-level field, not in board.Columns — add it first.
+	columns := []model.ColumnDef{{Name: "Name", Type: model.TypeText}}
 	for _, c := range board.Columns {
+		// Skip the implicit "name" column if the board happens to include it.
+		if c.Type == "name" {
+			continue
+		}
 		colType := model.TypeText
 		switch c.Type {
 		case "color", "status":

@@ -24,7 +24,7 @@ func TestJiraListWorkspaces(t *testing.T) {
 func TestJiraExtractProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/rest/api/3/field" {
+		if r.URL.Path == "/rest/api/3/field" || r.URL.Path == "/rest/api/3/field/" {
 			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 				{"id": "summary", "name": "Summary"},
 				{"id": "status", "name": "Status"},
@@ -69,6 +69,7 @@ func TestJiraListProjects(t *testing.T) {
 			"values": []map[string]interface{}{
 				{"id": "10000", "key": "PROJ", "name": "My Project"},
 			},
+			"isLast": true,
 		})
 	}))
 	defer srv.Close()
@@ -84,7 +85,7 @@ func TestJiraListProjects(t *testing.T) {
 func TestJiraExtractProjectPriorityAndType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/rest/api/3/field" {
+		if r.URL.Path == "/rest/api/3/field" || r.URL.Path == "/rest/api/3/field/" {
 			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
 				{"id": "summary", "name": "Summary"},
 				{"id": "priority", "name": "Priority"},

@@ -68,7 +68,9 @@ func (e *Extractor) ListWorkspaces(ctx context.Context) ([]model.Workspace, erro
 func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey string, opts extractor.Options) (*model.Project, error) {
 	// Build JQL with optional date filters
 	jql := fmt.Sprintf("project=%s ORDER BY created ASC", projectKey)
-	if !opts.CreatedAfter.IsZero() {
+	if !opts.CreatedAfter.IsZero() && !opts.UpdatedAfter.IsZero() {
+		jql = fmt.Sprintf("project=%s AND created >= \"%s\" AND updated >= \"%s\" ORDER BY created ASC", projectKey, opts.CreatedAfter.Format("2006-01-02"), opts.UpdatedAfter.Format("2006-01-02"))
+	} else if !opts.CreatedAfter.IsZero() {
 		jql = fmt.Sprintf("project=%s AND created >= \"%s\" ORDER BY created ASC", projectKey, opts.CreatedAfter.Format("2006-01-02"))
 	} else if !opts.UpdatedAfter.IsZero() {
 		jql = fmt.Sprintf("project=%s AND updated >= \"%s\" ORDER BY created ASC", projectKey, opts.UpdatedAfter.Format("2006-01-02"))
@@ -90,7 +92,7 @@ func (e *Extractor) ExtractProject(ctx context.Context, workspaceID, projectKey 
 			} `json:"issues"`
 			Total int `json:"total"`
 		}
-		path := fmt.Sprintf("/rest/api/3/search?jql=%s&startAt=%d&maxResults=100", url.QueryEscape(jql), startAt)
+		path := fmt.Sprintf("/rest/api/3/search/jql?jql=%s&startAt=%d&maxResults=100&fields=summary,description,status,priority,issuetype,assignee,reporter,labels,duedate", url.QueryEscape(jql), startAt)
 		if err := e.get(ctx, path, &resp); err != nil {
 			return nil, err
 		}
@@ -167,10 +169,30 @@ func (e *Extractor) ListProjects(ctx context.Context, workspaceID string) ([]ext
 			ID   string `json:"id"`
 			Key  string `json:"key"`
 			Name string `json:"name"`
-		} `json:"values"`
+		}
 	}
-	if err := e.get(ctx, "/rest/api/3/project/search?maxResults=100", &resp); err != nil {
-		return nil, err
+	startAt := 0
+	for {
+		path := fmt.Sprintf("/rest/api/3/project/search?maxResults=100&startAt=%d", startAt)
+		var page struct {
+			Values []struct {
+				ID   string `json:"id"`
+				Key  string `json:"key"`
+				Name string `json:"name"`
+			} `json:"values"`
+			Total      int  `json:"total"`
+			IsLast     bool `json:"isLast"`
+		}
+		if err := e.get(ctx, path, &page); err != nil {
+			return nil, err
+		}
+		for _, p := range page.Values {
+			resp.Values = append(resp.Values, p)
+		}
+		if page.IsLast || len(page.Values) == 0 {
+			break
+		}
+		startAt += len(page.Values)
 	}
 	refs := make([]extractor.ProjectRef, len(resp.Values))
 	for i, p := range resp.Values {

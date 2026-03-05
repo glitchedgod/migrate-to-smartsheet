@@ -8,11 +8,43 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/ratelimit"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
 	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 )
+
+// normalizeCellValue converts Go types that Smartsheet cannot parse into
+// types it accepts. Smartsheet cell values must be string, number, or bool.
+// Slices are joined as comma-separated strings; anything else is fmt.Sprintf'd.
+func normalizeCellValue(v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	switch val := v.(type) {
+	case string, bool, int, int64, float64:
+		return v
+	case []string:
+		return strings.Join(val, ", ")
+	case []interface{}:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, fmt.Sprintf("%v", item))
+		}
+		return strings.Join(parts, ", ")
+	default:
+		return fmt.Sprintf("%v", val)
+	}
+}
+
+func readAPIError(resp *http.Response) string {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil || len(body) == 0 {
+		return resp.Status
+	}
+	return fmt.Sprintf("%s: %s", resp.Status, body)
+}
 
 const defaultBaseURL = "https://api.smartsheet.com/2.0"
 
@@ -58,11 +90,20 @@ type createSheetResponse struct {
 		Columns   []struct {
 			ID    int64  `json:"id"`
 			Title string `json:"title"`
+			Type  string `json:"type"`
 		} `json:"columns"`
 	} `json:"result"`
 }
 
+// contactColumnSuffix is appended to contact-type column names that we fall back
+// to TEXT_NUMBER, to prevent Smartsheet from auto-classifying them as CONTACT_LIST.
+const contactColumnSuffix = " (text)"
+
 func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspaceID int64) (int64, map[string]int64, error) {
+	// originalNames maps the suffixed column title back to the extractor's original name,
+	// so that colMap returned to the caller uses original names as keys.
+	originalNames := map[string]string{}
+
 	cols := make([]columnPayload, 0, len(proj.Columns))
 	for i, c := range proj.Columns {
 		ssType := transformer.ToSmartsheetColumnType(c.Type)
@@ -70,17 +111,23 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 		if (ssType == "PICKLIST" || ssType == "MULTI_PICKLIST") && len(c.Options) == 0 {
 			ssType = "TEXT_NUMBER"
 		}
-		// Smartsheet returns 500 when creating CONTACT_LIST columns via the sheet
-		// creation endpoint — fall back to TEXT_NUMBER (values are still preserved).
-		if ssType == "CONTACT_LIST" {
+		// Smartsheet auto-classifies columns named "Owner", "Assigned To", etc. as
+		// CONTACT_LIST regardless of the requested type — even TEXT_NUMBER — and then
+		// rejects plain string values with errorCode 1235. Append a suffix to the title
+		// so Smartsheet treats it as a plain text column, while still mapping cells
+		// from extractors (which use the original name) correctly.
+		colTitle := c.Name
+		if ssType == "CONTACT_LIST" || c.Type == model.TypeContact || c.Type == model.TypeMultiContact {
 			ssType = "TEXT_NUMBER"
+			colTitle = c.Name + contactColumnSuffix
+			originalNames[colTitle] = c.Name
 		}
 		// Smartsheet does not support DATETIME as a column type — use DATE instead.
 		if ssType == "DATETIME" {
 			ssType = "DATE"
 		}
 		cp := columnPayload{
-			Title:   c.Name,
+			Title:   colTitle,
 			Type:    ssType,
 			Options: c.Options,
 		}
@@ -115,7 +162,7 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
-		return 0, nil, fmt.Errorf("smartsheet API error: %s", resp.Status)
+		return 0, nil, fmt.Errorf("smartsheet create sheet: %s", readAPIError(resp))
 	}
 
 	var result createSheetResponse
@@ -128,7 +175,13 @@ func (l *Loader) CreateSheet(ctx context.Context, proj *model.Project, workspace
 
 	colMap := make(map[string]int64, len(result.Result.Columns))
 	for _, c := range result.Result.Columns {
+		// Map by suffixed title first.
 		colMap[c.Title] = c.ID
+		// If this column had a suffix added, also map by the original name so that
+		// extractor cell lookups (which use the original column name) still resolve.
+		if orig, ok := originalNames[c.Title]; ok {
+			colMap[orig] = c.ID
+		}
 	}
 	return result.Result.ID, colMap, nil
 }
@@ -234,7 +287,7 @@ func (l *Loader) UploadAttachment(ctx context.Context, sheetID, rowID int64, fil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("smartsheet attachment upload error: %s", resp.Status)
+		return fmt.Errorf("smartsheet attachment upload: %s", readAPIError(resp))
 	}
 	return nil
 }
@@ -268,7 +321,7 @@ func (l *Loader) AddComment(ctx context.Context, sheetID, rowID int64, text stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("smartsheet add comment error: %s", resp.Status)
+		return fmt.Errorf("smartsheet add comment: %s", readAPIError(resp))
 	}
 	return nil
 }
@@ -282,7 +335,7 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 			if !ok {
 				continue
 			}
-			cells = append(cells, cellPayload{ColumnID: colID, Value: c.Value})
+			cells = append(cells, cellPayload{ColumnID: colID, Value: normalizeCellValue(c.Value)})
 		}
 		rp := rowPayload{ToBottom: true, Cells: cells}
 		if parentIDMap != nil && r.ParentID != "" {
@@ -314,7 +367,7 @@ func (l *Loader) insertRowBatch(ctx context.Context, sheetID int64, rows []model
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("smartsheet row insert error: %s", resp.Status)
+		return nil, fmt.Errorf("smartsheet row insert: %s", readAPIError(resp))
 	}
 
 	var result insertRowsResponse

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/extractor"
@@ -160,17 +159,9 @@ func extractAirtableValue(v interface{}, fieldType string) interface{} {
 			return emails
 		}
 	case "multipleAttachments":
-		if arr, ok := v.([]interface{}); ok {
-			names := make([]string, 0)
-			for _, item := range arr {
-				if m, ok := item.(map[string]interface{}); ok {
-					if name, ok := m["filename"].(string); ok {
-						names = append(names, name)
-					}
-				}
-			}
-			return strings.Join(names, ", ")
-		}
+		// Return nil — attachment objects are handled separately in ExtractProject
+		// by populating model.Row.Attachments, not as cell values.
+		return nil
 	}
 	return fmt.Sprintf("%v", v)
 }
@@ -252,14 +243,40 @@ func (e *Extractor) ExtractProject(ctx context.Context, baseID, tableID string, 
 	rows := make([]model.Row, 0, len(allRecords))
 	for _, r := range allRecords {
 		cells := make([]model.Cell, 0, len(r.Fields))
+		var attachments []model.Attachment
 		for name, v := range r.Fields {
 			fieldType := ""
 			if f, ok := fieldsByName[name]; ok {
 				fieldType = f.Type
 			}
-			cells = append(cells, model.Cell{ColumnName: name, Value: extractAirtableValue(v, fieldType)})
+			if fieldType == "multipleAttachments" {
+				if arr, ok := v.([]interface{}); ok {
+					for _, item := range arr {
+						if m, ok := item.(map[string]interface{}); ok {
+							url, _ := m["url"].(string)
+							filename, _ := m["filename"].(string)
+							var size int64
+							if sz, ok := m["size"].(float64); ok {
+								size = int64(sz)
+							}
+							if url != "" {
+								attachments = append(attachments, model.Attachment{
+									URL:       url,
+									Name:      filename,
+									SizeBytes: size,
+								})
+							}
+						}
+					}
+				}
+				continue // do not add a cell for attachment fields
+			}
+			val := extractAirtableValue(v, fieldType)
+			if val != nil {
+				cells = append(cells, model.Cell{ColumnName: name, Value: val})
+			}
 		}
-		rows = append(rows, model.Row{ID: r.ID, Cells: cells})
+		rows = append(rows, model.Row{ID: r.ID, Cells: cells, Attachments: attachments})
 	}
 
 	return &model.Project{ID: tableID, Name: tableName, Columns: columns, Rows: rows}, nil
