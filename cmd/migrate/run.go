@@ -18,9 +18,11 @@ import (
 	trelloext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/trello"
 	wrikeext "github.com/glitchedgod/migrate-to-smartsheet/internal/extractor/wrike"
 	ssloader "github.com/glitchedgod/migrate-to-smartsheet/internal/loader/smartsheet"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/miglog"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/preview"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/state"
 	"github.com/glitchedgod/migrate-to-smartsheet/internal/transformer"
+	"github.com/glitchedgod/migrate-to-smartsheet/internal/wizard"
 	"github.com/glitchedgod/migrate-to-smartsheet/pkg/model"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
@@ -72,7 +74,22 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}, &sourceStr)
 	}
 	if sourceToken == "" && !yes {
-		survey.AskOne(&survey.Password{Message: fmt.Sprintf("[%s] API token:", sourceStr)}, &sourceToken) //nolint:errcheck
+		creds, err := wizard.ShowAndPrompt(sourceStr)
+		if err != nil {
+			return fmt.Errorf("credential wizard: %w", err)
+		}
+		sourceToken = creds.Token
+		// Trello: wizard collects API key separately
+		if creds.Key != "" {
+			_ = cmd.Flags().Set("source-key", creds.Key)
+		}
+		// Jira: wizard collects instance URL and email
+		if creds.Instance != "" {
+			_ = cmd.Flags().Set("jira-instance", creds.Instance)
+		}
+		if creds.Email != "" {
+			_ = cmd.Flags().Set("jira-email", creds.Email)
+		}
 	}
 	if sourceStr == "" {
 		return fmt.Errorf("--source is required")
@@ -84,6 +101,17 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	ext, err := buildExtractor(sourceStr, sourceToken, cmd)
 	if err != nil {
 		return fmt.Errorf("building extractor: %w", err)
+	}
+
+	// Structured log file — always created, even with --yes.
+	logFile := fmt.Sprintf(".migrate-log-%s-%s.log", sourceStr, time.Now().Format("2006-01-02-15-04-05"))
+	mlog, logErr := miglog.New(logFile, sourceStr)
+	if logErr != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠  Could not create log file: %v\n", logErr)
+		mlog = nil
+	} else {
+		defer func() { _ = mlog.Close() }()
+		mlog.Info("migration started", "source", sourceStr)
 	}
 
 	// Connect to source
@@ -168,7 +196,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	// Smartsheet setup
 	if ssToken == "" && !yes {
-		survey.AskOne(&survey.Password{Message: "Smartsheet API token:"}, &ssToken) //nolint:errcheck
+		creds, err := wizard.ShowAndPrompt("smartsheet")
+		if err != nil {
+			return fmt.Errorf("smartsheet credential wizard: %w", err)
+		}
+		ssToken = creds.Token
 	}
 	if ssToken == "" {
 		return fmt.Errorf("--smartsheet-token is required")
@@ -277,6 +309,8 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// Migrate
 	bar := progressbar.Default(int64(len(allProjects)), "Migrating")
 	allSucceeded := true
+	errCount := 0
+	warnCount := len(summary.Warnings)
 	for i := range allProjects {
 		proj := &allProjects[i]
 
@@ -304,10 +338,18 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		// Handle conflict check (skip is default — if sheet exists, we'll get an API error and log it)
 		_ = conflictMode // TODO: implement rename/overwrite in loader
 
+		if mlog != nil {
+			mlog.SheetStart(sheetName, len(proj.Columns), len(proj.Rows))
+		}
+
 		sheetID, colMap, contactColIDs, err := loader.CreateSheet(ctx, proj, 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to create sheet %s: %v\n", sheetName, err)
+			if mlog != nil {
+				mlog.SheetFailed(sheetName, err)
+			}
 			allSucceeded = false
+			errCount++
 			_ = bar.Add(1)
 			continue
 		}
@@ -315,10 +357,15 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		rowIDMap, err := loader.BulkInsertRows(ctx, sheetID, proj.Rows, colMap, contactColIDs)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n  ⚠  Failed to insert rows for %s: %v\n", sheetName, err)
+			if mlog != nil {
+				mlog.SheetFailed(sheetName, err)
+			}
 			allSucceeded = false
+			errCount++
 		}
 
 		// Attachments
+		attachCount := 0
 		if includeAttachments {
 			for _, row := range proj.Rows {
 				ssRowID, ok := rowIDMap[row.ID]
@@ -328,16 +375,27 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 				for _, att := range row.Attachments {
 					if att.SizeBytes > 25*1024*1024 {
 						fmt.Fprintf(os.Stderr, "\n  ⚠  Skipping attachment %s (>25MB)\n", att.Name)
+						if mlog != nil {
+							mlog.AttachmentSkipped(sheetName, att.Name, "exceeds 25MB limit")
+						}
+						warnCount++
 						continue
 					}
 					if err := downloadAndUpload(ctx, loader, sheetID, ssRowID, att); err != nil {
 						fmt.Fprintf(os.Stderr, "\n  ⚠  Attachment %s failed: %v\n", att.Name, err)
+						if mlog != nil {
+							mlog.AttachmentFailed(sheetName, att.Name, err)
+						}
+						errCount++
+					} else {
+						attachCount++
 					}
 				}
 			}
 		}
 
 		// Comments
+		commentCount := 0
 		if includeComments {
 			for _, row := range proj.Rows {
 				ssRowID, ok := rowIDMap[row.ID]
@@ -348,9 +406,19 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 					text := fmt.Sprintf("[%s] %s", comment.AuthorName, comment.Body)
 					if err := loader.AddComment(ctx, sheetID, ssRowID, text); err != nil {
 						fmt.Fprintf(os.Stderr, "\n  ⚠  Comment post failed: %v\n", err)
+						if mlog != nil {
+							mlog.CommentFailed(sheetName, err)
+						}
+						errCount++
+					} else {
+						commentCount++
 					}
 				}
 			}
+		}
+
+		if mlog != nil {
+			mlog.SheetComplete(sheetName, len(proj.Rows), attachCount, commentCount)
 		}
 
 		migState.MarkCompleted(proj.ID)
@@ -358,11 +426,27 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		_ = bar.Add(1)
 	}
 
+	// Final status
+	status := "success"
+	if !allSucceeded {
+		status = "partial"
+	}
+	if mlog != nil {
+		totalRows := 0
+		for _, p := range allProjects {
+			totalRows += len(p.Rows)
+		}
+		mlog.Summary(len(allProjects), totalRows, warnCount, errCount, status)
+	}
+
 	fmt.Println("\n✓ Migration complete!")
 	if allSucceeded {
 		_ = os.Remove(stateFile)
 	} else {
 		fmt.Printf("  State saved to %s for resume.\n", stateFile)
+	}
+	if mlog != nil {
+		fmt.Printf("  📋 Log: %s\n", mlog.FilePath())
 	}
 	return nil
 }

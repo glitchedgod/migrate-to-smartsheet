@@ -10,3 +10,4 @@ coverage.out
 .env
 EXIT:
 echo
+.migrate-log-*.log
