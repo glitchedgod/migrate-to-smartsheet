@@ -1045,26 +1045,31 @@ func deduplicateProjectColumns(proj *model.Project) {
 		origNames[i] = c.Name
 	}
 
-	// Assign final names; track all assigned names to avoid new collisions.
-	assigned := make(map[string]bool, n)
+	// Smartsheet compares column titles case-insensitively, so we normalise to
+	// lowercase for all collision checks while preserving display casing.
+	lower := func(s string) string { return strings.ToLower(s) }
+
+	// Assign final names; track all assigned names (lowercased) to avoid new collisions.
+	assignedLower := make(map[string]bool, n)
 	finalNames := make([]string, n)
-	seenCount := make(map[string]int, n)
+	seenCountLower := make(map[string]int, n)
 
 	for i, orig := range origNames {
-		seenCount[orig]++
-		if seenCount[orig] == 1 {
+		key := lower(orig)
+		seenCountLower[key]++
+		if seenCountLower[key] == 1 {
 			finalNames[i] = orig
-			assigned[orig] = true
+			assignedLower[key] = true
 			continue
 		}
-		counter := seenCount[orig]
+		counter := seenCountLower[key]
 		candidate := fmt.Sprintf("%s (%d)", orig, counter)
-		for assigned[candidate] {
+		for assignedLower[lower(candidate)] {
 			counter++
 			candidate = fmt.Sprintf("%s (%d)", orig, counter)
 		}
 		finalNames[i] = candidate
-		assigned[candidate] = true
+		assignedLower[lower(candidate)] = true
 		proj.Columns[i].Name = candidate
 	}
 
@@ -1072,23 +1077,23 @@ func deduplicateProjectColumns(proj *model.Project) {
 	// name. We match cells to column occurrences in column-index order: the
 	// first cell with name X goes to column occurrence 1 (keeps name X), the
 	// second cell with name X goes to occurrence 2 (gets renamed), etc.
-	// Build a lookup: origName → ordered list of final names.
+	// Build a lookup: lower(origName) → ordered list of final names.
 	occurrencesByOrig := make(map[string][]string, n)
 	for i, orig := range origNames {
-		occurrencesByOrig[orig] = append(occurrencesByOrig[orig], finalNames[i])
+		occurrencesByOrig[lower(orig)] = append(occurrencesByOrig[lower(orig)], finalNames[i])
 	}
 
 	for ri := range proj.Rows {
 		// Per-row counter: how many cells with each original name we have seen.
 		rowOccurrence := make(map[string]int)
 		for ci := range proj.Rows[ri].Cells {
-			name := proj.Rows[ri].Cells[ci].ColumnName
-			finals, isDup := occurrencesByOrig[name]
+			key := lower(proj.Rows[ri].Cells[ci].ColumnName)
+			finals, isDup := occurrencesByOrig[key]
 			if !isDup || len(finals) <= 1 {
 				continue // unique name — no rename needed
 			}
-			idx := rowOccurrence[name]
-			rowOccurrence[name]++
+			idx := rowOccurrence[key]
+			rowOccurrence[key]++
 			if idx < len(finals) {
 				proj.Rows[ri].Cells[ci].ColumnName = finals[idx]
 			}
